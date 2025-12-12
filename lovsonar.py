@@ -23,7 +23,7 @@ KEYWORDS = [
 ]
 
 RSS_URL_HORINGER = "https://www.regjeringen.no/no/aktuelt/rss/id2581966/"
-DB_PATH = "lovsonar_seen.db"
+DB_PATH = "lovsonar_v2.db"  # <--- Endret navn for å nulle ut hukommelsen
 OUTPUT_FILE = "nye_saker.json"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
