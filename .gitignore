@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Lovsonar spesifikke filer
+lovsonar_seen.db
+nye_saker.json
+lovsonar_seen.db-journal
