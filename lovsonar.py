@@ -15,6 +15,7 @@ import os
 # ===========================================
 # Nøkkelord tilpasset din profil (Obs Bygg/Handel, AI, Juss, Økonomi):
 KEYWORDS = [
+    "om",  # <--- DETTE ORDET FINNES I ALLE SAKER
     "varehandel", "forbruker", "konkurranse", "arbeidsmiljø", 
     "kunstig intelligens", "digital", "data", "personvern", 
     "markedsføring", "bygg", "plan- og bygningsloven", "sirkulær",
