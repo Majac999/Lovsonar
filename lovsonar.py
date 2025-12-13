@@ -15,8 +15,8 @@ import smtplib
 # ===========================================
 KEYWORDS = [
     "bank",
-    "lov",             # Husk komma!
-    "regjeringen",     # Husk komma!
+    "lov",            # TEST-ORD (Husk å fjerne senere)
+    "regjeringen",    # TEST-ORD (Husk å fjerne senere)
     "finans",
     "teknologi",
     "digital",
@@ -42,7 +42,7 @@ OUTPUT_FILE = "nye_treff.json"
 DEFAULT_REPORT_DAYS = 7
 
 HEADERS = {
-    "User-Agent": "Lovsonar/4.0 (+https://github.com/<org>/<repo>)"
+    "User-Agent": "Lovsonar/4.1 (+https://github.com/Majac999/Lovsonar)"
 }
 
 logging.basicConfig(
@@ -92,8 +92,8 @@ def mark_as_seen(item_id, source, title):
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT OR IGNORE INTO seen_items
-        (item_id, source, title, date_seen)
+        INSERT OR IGNORE INTO seen_items 
+        (item_id, source, title, date_seen) 
         VALUES (?, ?, ?, ?)
         """,
         (item_id, source, title, datetime.utcnow().isoformat())
@@ -106,15 +106,15 @@ def log_weekly_hit(item):
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO weekly_hits
-        (source, title, description, link, detected_at)
+        INSERT INTO weekly_hits 
+        (source, title, description, link, detected_at) 
         VALUES (?, ?, ?, ?, ?)
         """,
         (
-            item["type"],
-            item["title"],
-            item["description"],
-            item["link"],
+            item["type"], 
+            item["title"], 
+            item["description"], 
+            item["link"], 
             datetime.utcnow().isoformat()
         )
     )
@@ -127,7 +127,8 @@ def log_weekly_hit(item):
 def matches_keywords(text):
     if not text:
         return False
-    text_lower = text.lower()
+    # Sikrer at vi jobber med tekst, selv om vi får tall
+    text_lower = str(text).lower()
     return any(keyword in text_lower for keyword in KEYWORDS)
 
 def send_email(emne, tekst):
@@ -163,8 +164,10 @@ def check_rss_feed(source_name, url):
     entries = []
     try:
         feed = feedparser.parse(url)
-        if getattr(feed, "bozo", 0):
-            logger.warning("RSS-advarsel for %s: %s", source_name, feed.bozo_exception)
+        # Ignorerer bozo-feil (XML-feil) så lenge vi får entries
+        if not feed.entries and getattr(feed, "bozo", 0):
+             logger.warning("RSS-advarsel for %s: %s", source_name, feed.bozo_exception)
+        
         for entry in feed.entries:
             item_id = entry.get("guid") or entry.get("id") or entry.get("link")
             if not item_id or is_seen(item_id):
@@ -194,8 +197,8 @@ def check_rss_feed(source_name, url):
 def get_current_session():
     try:
         resp = requests.get(
-            "https://data.stortinget.no/eksport/sesjoner?format=json",
-            headers=HEADERS,
+            "https://data.stortinget.no/eksport/sesjoner?format=json", 
+            headers=HEADERS, 
             timeout=10
         )
         resp.raise_for_status()
@@ -220,9 +223,11 @@ def get_stortinget_api():
         data = resp.json()
 
         for sak in data.get("saker_liste", []):
-            dok_gruppe = (sak.get("dokumentgruppe") or "").lower()
-            if "proposisjon" not in dok_gruppe:
-                continue
+            # HER VAR FEILEN: Vi konverterer til str() før .lower()
+            dok_gruppe = str(sak.get("dokumentgruppe") or "").lower()
+            
+            # Vi vil ha alt, ikke bare proposisjoner, for å teste
+            # if "proposisjon" not in dok_gruppe: continue
 
             sak_id = f"{session_id}-{sak.get('id', '')}"
             title = sak.get("tittel", "")
@@ -233,9 +238,9 @@ def get_stortinget_api():
             if matches_keywords(title):
                 link = f"https://www.stortinget.no/no/Saker-og-publikasjoner/Saker/Sak/?p={sak.get('id', '')}"
                 hit = {
-                    "type": "🏛️ Stortingssak (Prop)",
+                    "type": "🏛️ Stortingssak",
                     "title": title,
-                    "description": sak.get("henvisning", "Ingen beskrivelse"),
+                    "description": str(sak.get("henvisning") or "Ingen beskrivelse"),
                     "link": link,
                     "source": "Stortinget"
                 }
@@ -243,7 +248,7 @@ def get_stortinget_api():
                 mark_as_seen(sak_id, "stortinget_api", title)
     except Exception as e:
         logger.error("Feil ved Stortinget API: %s", e)
-
+    
     return hits
 
 # ===========================================
@@ -255,11 +260,11 @@ def fetch_report_hits(days):
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT source, title, description, link, detected_at
-        FROM weekly_hits
-        WHERE detected_at >= ?
+        SELECT source, title, description, link, detected_at 
+        FROM weekly_hits 
+        WHERE detected_at >= ? 
         ORDER BY detected_at DESC
-        """,
+        """, 
         (cutoff,)
     )
     rows = cursor.fetchall()
@@ -277,7 +282,7 @@ def purge_report_hits(max_age_days=30):
 def build_weekly_report(rows, days):
     if not rows:
         return f"Ingen nye treff de siste {days} dagene."
-
+    
     headline = f"Lovsonar-rapport for de siste {days} dagene ({len(rows)} funn)\n"
     body_lines = [headline]
 
@@ -331,7 +336,7 @@ def run_weekly(days):
         send_weekly_report(rows, days)
     else:
         logger.info("Ingen treff å rapportere for de siste %d dagene.", days)
-
+    
     purge_report_hits(max_age_days=30)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(
@@ -347,9 +352,9 @@ def run_weekly(days):
                     }
                     for r in rows
                 ]
-            },
-            f,
-            ensure_ascii=False,
+            }, 
+            f, 
+            ensure_ascii=False, 
             indent=2
         )
 
