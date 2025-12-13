@@ -40,7 +40,7 @@ OUTPUT_FILE = "nye_treff.json"
 DEFAULT_REPORT_DAYS = 7
 
 HEADERS = {
-    "User-Agent": "Lovsonar/4.1 (+https://github.com/Majac999/Lovsonar)"
+    "User-Agent": "Lovsonar/4.2 (+https://github.com/Majac999/Lovsonar)"
 }
 
 logging.basicConfig(
@@ -221,11 +221,15 @@ def get_stortinget_api():
         data = resp.json()
 
         for sak in data.get("saker_liste", []):
-            # HER VAR FEILEN: Vi konverterer til str() før .lower()
+            # Vi konverterer til str() før .lower() for å unngå krasj ved tall
             dok_gruppe = str(sak.get("dokumentgruppe") or "").lower()
             
-            # Vi vil ha alt, ikke bare proposisjoner, for å teste
-            # if "proposisjon" not in dok_gruppe: continue
+            # --- FILTER PÅ (PRODUKSJON) ---
+            # Vi vil bare ha proposisjoner (lovforslag) og innstillinger.
+            # Dette filtrerer bort spørsmål og interpellasjoner.
+            if "proposisjon" not in dok_gruppe and "innstilling" not in dok_gruppe:
+                 continue
+            # ------------------------------
 
             sak_id = f"{session_id}-{sak.get('id', '')}"
             title = sak.get("tittel", "")
