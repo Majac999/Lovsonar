@@ -15,6 +15,7 @@ import smtplib
 # ===========================================
 KEYWORDS = [
     "bank",
+    "regjeringen"
     "finans",
     "teknologi",
     "digital",
