@@ -1,58 +1,37 @@
-name: Lovsonar
+name: Lovsonar - Daglig Innsamling
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Kjører kl 07:00 norsk tid hver morgen
-  workflow_dispatch:      # Lar deg kjøre den manuelt for testing
+    - cron: '0 6 * * *'  # Kjører kl 07:00 hver dag
+  workflow_dispatch:     # Manuell start-knapp
+
+permissions:
+  contents: write        # VIKTIG: Må ha skrivetilgang for å lagre databasen
 
 jobs:
-  scan:
+  collect:
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      contents: write
-      
     steps:
-    - uses: actions/checkout@v3
-    
-    - uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-        
-    - name: Installer
-      run: pip install -r requirements.txt
-      
-    - name: Hent database
-      uses: actions/cache@v3
-      with:
-        path: lovsonar_seen.db
-        key: sonar-db-${{ github.run_id }}
-        restore-keys: |
-          sonar-db-
-          
-    - name: Kjør Sonar
-      run: python lovsonar.py
-      
-    - name: Varsle via Issue
-      uses: actions/github-script@v6
-      with:
-        script: |
-          const fs = require('fs');
-          try {
-            const data = JSON.parse(fs.readFileSync('nye_saker.json', 'utf8'));
-            if (data.count > 0) {
-              const body = data.items.map(i => 
-                 `### ${i.type}: ${i.title}\n` +
-                 `**Lenke:** [Les mer](${i.link})\n` +
-                 (i.description ? `> ${i.description}\n` : '') + `\n---\n`
-              ).join('\n');
-              
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: `📡 Lovsonar treff: ${data.count} nye saker`,
-                body: `Fant nye saker for deg:\n\n${body}`,
-                labels: ['varsel']
-              });
-            }
-          } catch (e) { console.log("Ingen nye saker funnet"); }
+      - name: Hent kode
+        uses: actions/checkout@v3
+
+      - name: Sett opp Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Installer avhengigheter
+        run: pip install requests feedparser
+
+      - name: Kjør Lovsonar (Daglig modus)
+        env:
+          LOVSONAR_MODE: daily
+        run: python lovsonar.py
+
+      - name: Lagre databasen (Commit & Push)
+        run: |
+          git config --global user.name "Lovsonar Bot"
+          git config --global user.email "bot@noreply.github.com"
+          git add lovsonar_seen.db
+          # Lagrer kun hvis det er nye data
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database [skip ci]" && git push)
