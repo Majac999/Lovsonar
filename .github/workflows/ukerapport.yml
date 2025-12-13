@@ -38,5 +38,5 @@ jobs:
           git config --global user.name "Lovsonar Bot"
           git config --global user.email "bot@noreply.github.com"
           git add -f lovsonar_seen.db
-          # Sjekk om det er endringer før vi lagrer
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database etter ukesrapport [skip ci]" && git push)
+          # Vi committer, henter nye endringer (pull --rebase), og SÅ pusher vi
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database etter ukesrapport [skip ci]" && git pull --rebase && git push)
