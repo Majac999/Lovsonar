@@ -1,36 +1,57 @@
-"""
-Lovsonar - PRODUKSJONSVERSJON
-Overvåker høringer og proposisjoner med User-Agent fix.
-"""
 import sqlite3
 import requests
 import feedparser
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
+import sys
+from email.mime.text import MIMEText
+from email.header import Header
+import smtplib
 
 # ===========================================
-# KONFIGURASJON
+# 0. Konfigurasjon
 # ===========================================
-# DEBUG-ORD (For å teste at det virker nå):
-KEYWORDS = ["om", "i", "og", "varehandel", "bygg", "ai"]
+KEYWORDS = [
+    "bank",
+    "finans",
+    "teknologi",
+    "digital",
+    "kunstig intelligens",
+    "krypto",
+    "hvitvasking",
+    "bærekraft",
+    "eu-direktiv",
+    "forordning",
+    "arbeidsmiljø",
+    "personvern"
+]
 
-# VIKTIG: Bruker hoved-feeden for høringer (id1763) i stedet for den spesifikke vi testet
-RSS_URL_HORINGER = "https://www.regjeringen.no/no/rss/Horinger/id1763/"
-DB_PATH = "lovsonar_final.db"
-OUTPUT_FILE = "nye_saker.json"
-
-# HER ER NØKKELEN TIL SUKSESS (User-Agent):
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+RSS_SOURCES = {
+    "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/dokument/eos-notater/rss/",
+    "📚 NOU (Utredning)": "https://www.regjeringen.no/no/dokument/nou-er/rss/",
+    "📢 Høring": "https://www.regjeringen.no/no/dokument/horinger/rss/",
+    "📜 Proposisjon": "https://www.regjeringen.no/no/dokument/proposisjoner/rss/"
 }
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+DB_PATH = "lovsonar_seen.db"
+OUTPUT_FILE = "nye_treff.json"
+DEFAULT_REPORT_DAYS = 7
+
+HEADERS = {
+    "User-Agent": "Lovsonar/4.0 (+https://github.com/<org>/<repo>)"
+}
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout
+)
 logger = logging.getLogger(__name__)
 
 # ===========================================
-# DATABASE
+# 1. Database
 # ===========================================
 def setup_database():
     conn = sqlite3.connect(DB_PATH)
@@ -38,7 +59,19 @@ def setup_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS seen_items (
             item_id TEXT PRIMARY KEY,
-            source TEXT, title TEXT, date_seen TEXT
+            source TEXT,
+            title TEXT,
+            date_seen TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_hits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT,
+            title TEXT,
+            description TEXT,
+            link TEXT,
+            detected_at TEXT
         )
     """)
     conn.commit()
@@ -56,98 +89,276 @@ def mark_as_seen(item_id, source, title):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
-        (item_id, source, title, datetime.now().isoformat())
+        """
+        INSERT OR IGNORE INTO seen_items
+        (item_id, source, title, date_seen)
+        VALUES (?, ?, ?, ?)
+        """,
+        (item_id, source, title, datetime.utcnow().isoformat())
     )
     conn.commit()
     conn.close()
 
+def log_weekly_hit(item):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO weekly_hits
+        (source, title, description, link, detected_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            item["type"],
+            item["title"],
+            item["description"],
+            item["link"],
+            datetime.utcnow().isoformat()
+        )
+    )
+    conn.commit()
+    conn.close()
+
+# ===========================================
+# 2. Felles logikk
+# ===========================================
 def matches_keywords(text):
-    if not text: return False
+    if not text:
+        return False
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in KEYWORDS)
 
-# ===========================================
-# 1. HØRINGER (Regjeringen)
-# ===========================================
-def get_horinger():
-    logger.info("Sjekker høringer...")
+def send_email(emne, tekst):
+    avsender = os.environ.get("EMAIL_USER")
+    passord = os.environ.get("EMAIL_PASS")
+    mottaker = os.environ.get("EMAIL_RECIPIENT", avsender)
+
+    if not avsender or not passord or not mottaker:
+        logger.warning("Mangler e-postkonfigurasjon (EMAIL_USER/PASS/RECIPIENT). Sender ikke e-post.")
+        return False
+
+    msg = MIMEText(tekst, "plain", "utf-8")
+    msg["Subject"] = Header(emne, "utf-8")
+    msg["From"] = avsender
+    msg["To"] = mottaker
+
     try:
-        # Laster ned manuelt med headers først
-        resp = requests.get(RSS_URL_HORINGER, headers=HEADERS, timeout=15)
-        feed = feedparser.parse(resp.content)
-        
-        new_items = []
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30)
+        server.login(avsender, passord)
+        server.send_message(msg)
+        server.quit()
+        logger.info("E-post sendt til %s", mottaker)
+        return True
+    except Exception as e:
+        logger.error("Feil ved sending av e-post: %s", e)
+        return False
+
+# ===========================================
+# 3. RSS-kilder
+# ===========================================
+def check_rss_feed(source_name, url):
+    logger.info("Sjekker kilde: %s ...", source_name)
+    entries = []
+    try:
+        feed = feedparser.parse(url)
+        if getattr(feed, "bozo", 0):
+            logger.warning("RSS-advarsel for %s: %s", source_name, feed.bozo_exception)
         for entry in feed.entries:
-            item_id = entry.get('link', entry.get('id', ''))
-            if not item_id or is_seen(item_id): continue
-            
-            title = entry.get('title', '')
-            description = entry.get('description', entry.get('summary', ''))
-            link = entry.get('link', '')
-            
+            item_id = entry.get("guid") or entry.get("id") or entry.get("link")
+            if not item_id or is_seen(item_id):
+                continue
+
+            title = entry.get("title", "").strip()
+            description = (entry.get("description") or entry.get("summary") or "").strip()
+            link = entry.get("link", "")
+
             if matches_keywords(f"{title} {description}"):
-                new_items.append({
-                    'type': 'Høring',
-                    'title': title,
-                    'description': description[:300],
-                    'link': link,
-                    'source': 'Regjeringen'
-                })
-                mark_as_seen(item_id, 'regjeringen', title)
-        return new_items
+                hit = {
+                    "type": source_name,
+                    "title": title,
+                    "description": (description[:300] + "...") if description else "",
+                    "link": link,
+                    "source": "Regjeringen.no"
+                }
+                entries.append(hit)
+                mark_as_seen(item_id, source_name, title)
     except Exception as e:
-        logger.error(f"Feil ved høringer: {e}")
-        return []
+        logger.error("Feil ved kilde %s: %s", source_name, e)
+    return entries
 
 # ===========================================
-# 2. PROPOSISJONER (Stortinget)
+# 4. Stortinget API
 # ===========================================
-def get_proposisjoner():
-    logger.info("Sjekker proposisjoner...")
+def get_current_session():
     try:
-        # Henter sesjon med headers
-        sesj_url = "https://data.stortinget.no/eksport/sesjoner?format=json"
-        sesj_resp = requests.get(sesj_url, headers=HEADERS, timeout=10)
-        # HER VAR FEILEN: 'sesjoner_liste' (flertall), ikke 'sesjon_liste'
-        session_id = sesj_resp.json()['sesjoner_liste'][-1]['id']
-        
-        # Henter saker
-        url = f"https://data.stortinget.no/eksport/saker?sesjonid={session_id}&format=json"
-        data = requests.get(url, headers=HEADERS, timeout=15).json()
-        
-        new_items = []
-        for sak in data.get('saker_liste', []):
-            if 'proposisjon' not in sak.get('dokumentgruppe', '').lower(): continue
-            
-            sak_id = str(sak.get('id', ''))
-            if is_seen(sak_id): continue
-            
-            title = sak.get('tittel', '')
-            if matches_keywords(title):
-                new_items.append({
-                    'type': 'Proposisjon',
-                    'title': title,
-                    'link': f"https://www.stortinget.no/no/Saker-og-publikasjoner/Saker/Sak/?p={sak_id}",
-                    'source': 'Stortinget'
-                })
-                mark_as_seen(sak_id, 'stortinget', title)
-        return new_items
+        resp = requests.get(
+            "https://data.stortinget.no/eksport/sesjoner?format=json",
+            headers=HEADERS,
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("innevaerende_sesjon", {}).get("id")
     except Exception as e:
-        logger.error(f"Feil ved proposisjoner: {e}")
+        logger.error("Kunne ikke hente inneværende sesjon: %s", e)
+        return None
+
+def get_stortinget_api():
+    session_id = get_current_session()
+    if not session_id:
         return []
 
+    logger.info("Sjekker kilde: 🏛️ Stortinget (sesjon %s) ...", session_id)
+    url = f"https://data.stortinget.no/eksport/saker?sesjonid={session_id}&format=json"
+    hits = []
+
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+
+        for sak in data.get("saker_liste", []):
+            dok_gruppe = (sak.get("dokumentgruppe") or "").lower()
+            if "proposisjon" not in dok_gruppe:
+                continue
+
+            sak_id = f"{session_id}-{sak.get('id', '')}"
+            title = sak.get("tittel", "")
+
+            if is_seen(sak_id):
+                continue
+
+            if matches_keywords(title):
+                link = f"https://www.stortinget.no/no/Saker-og-publikasjoner/Saker/Sak/?p={sak.get('id', '')}"
+                hit = {
+                    "type": "🏛️ Stortingssak (Prop)",
+                    "title": title,
+                    "description": sak.get("henvisning", "Ingen beskrivelse"),
+                    "link": link,
+                    "source": "Stortinget"
+                }
+                hits.append(hit)
+                mark_as_seen(sak_id, "stortinget_api", title)
+    except Exception as e:
+        logger.error("Feil ved Stortinget API: %s", e)
+
+    return hits
+
 # ===========================================
-# KJØRING
+# 5. Rapport-funksjoner
+# ===========================================
+def fetch_report_hits(days):
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT source, title, description, link, detected_at
+        FROM weekly_hits
+        WHERE detected_at >= ?
+        ORDER BY detected_at DESC
+        """,
+        (cutoff,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def purge_report_hits(max_age_days=30):
+    cutoff = (datetime.utcnow() - timedelta(days=max_age_days)).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM weekly_hits WHERE detected_at < ?", (cutoff,))
+    conn.commit()
+    conn.close()
+
+def build_weekly_report(rows, days):
+    if not rows:
+        return f"Ingen nye treff de siste {days} dagene."
+
+    headline = f"Lovsonar-rapport for de siste {days} dagene ({len(rows)} funn)\n"
+    body_lines = [headline]
+
+    for source, title, description, link, detected_at in rows:
+        body_lines.append(
+            f"- {source}: {title}\n"
+            f"  Lenke: {link or 'Ingen lenke'}\n"
+            f"  Oppdaget: {detected_at}\n"
+            f"  {description}\n"
+        )
+    return "\n".join(body_lines)
+
+def send_weekly_report(rows, days):
+    tekst = build_weekly_report(rows, days)
+    emne = f"Lovsonar – rapport ({len(rows)} funn, siste {days} dager)"
+    send_email(emne, tekst)
+
+# ===========================================
+# 6. Kjøremodi
+# ===========================================
+def run_daily():
+    logger.info("=== Starter Lovsonar (daglig modus) ===")
+    setup_database()
+    hits = []
+
+    for name, url in RSS_SOURCES.items():
+        hits.extend(check_rss_feed(name, url))
+
+    hits.extend(get_stortinget_api())
+
+    # Logges for ukesrapporten
+    for item in hits:
+        log_weekly_hit(item)
+
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        json.dump({"count": len(hits), "items": hits}, f, ensure_ascii=False, indent=2)
+
+    if hits:
+        logger.info("Fant %d nye treff.", len(hits))
+        for item in hits:
+            logger.info("%s: %s", item["type"], item["title"])
+    else:
+        logger.info("Ingen nye treff i dag.")
+
+def run_weekly(days):
+    logger.info("=== Starter Lovsonar (rapportmodus, %d dager) ===", days)
+    setup_database()
+
+    rows = fetch_report_hits(days=days)
+    if rows:
+        send_weekly_report(rows, days)
+    else:
+        logger.info("Ingen treff å rapportere for de siste %d dagene.", days)
+
+    purge_report_hits(max_age_days=30)
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "count": len(rows),
+                "items": [
+                    {
+                        "source": r[0],
+                        "title": r[1],
+                        "description": r[2],
+                        "link": r[3],
+                        "detected_at": r[4]
+                    }
+                    for r in rows
+                ]
+            },
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
+
+# ===========================================
+# 7. Entrypoint
 # ===========================================
 if __name__ == "__main__":
-    setup_database()
-    items = get_horinger() + get_proposisjoner()
-    
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        json.dump({'count': len(items), 'items': items}, f, ensure_ascii=False)
-    
-    if items:
-        print(f"Fant {len(items)} nye saker.")
+    mode = os.environ.get("LOVSONAR_MODE", "daily").strip().lower()
+    report_days = int(os.environ.get("REPORT_WINDOW_DAYS", DEFAULT_REPORT_DAYS))
+
+    if mode == "weekly":
+        run_weekly(report_days)
     else:
-        print("Ingen nye saker funnet.")
+        run_daily()
