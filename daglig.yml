@@ -28,10 +28,12 @@ jobs:
           LOVSONAR_MODE: daily
         run: python lovsonar.py
 
-      - name: Lagre databasen (Commit & Push)
+    - name: Lagre databasen (Commit & Push)
         run: |
           git config --global user.name "Lovsonar Bot"
           git config --global user.email "bot@noreply.github.com"
           git add -f lovsonar_seen.db
+          # Sjekk om det er endringer før vi lagrer
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database [skip ci]" && git push)
           # Sjekk om det er endringer før vi lagrer
           git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database etter ukesrapport [skip ci]" && git push)it push)
