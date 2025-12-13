@@ -1,18 +1,20 @@
-name: Lovsonar - Ukesrapport
+name: Lovsonar - Fredag Rapport
 
 on:
   schedule:
-    - cron: '0 14 * * 5'  # Kjører hver fredag kl 15:00 (norsk tid ca)
-  workflow_dispatch:      # Gjør at du kan teste den manuelt med en knapp
+    # '0 6 * * 5' betyr kl 06:00 UTC = kl 07:00 Norsk tid, hver FREDAG
+    # Dette er 1 time etter at innsamlingen startet.
+    - cron: '0 6 * * 5'
+  workflow_dispatch:      # Manuell start-knapp
 
 permissions:
-  contents: write         # VIKTIG: Gir lov til å lagre endringer i databasen
+  contents: write
 
 jobs:
   report:
     runs-on: ubuntu-latest
     steps:
-      - name: Hent kode og database
+      - name: Hent kode
         uses: actions/checkout@v3
 
       - name: Sett opp Python
@@ -23,20 +25,19 @@ jobs:
       - name: Installer avhengigheter
         run: pip install requests feedparser
 
-      - name: Send Ukesrapport på e-post
+      - name: Send Ukesrapport
         env:
           LOVSONAR_MODE: weekly
-          REPORT_WINDOW_DAYS: 7
+          REPORT_WINDOW_DAYS: 7  # Vi rapporterer for hele uken
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
         run: python lovsonar.py
 
-      - name: Oppdater database etter sending
-        # Dette steget rydder i databasen og lagrer endringene
+      - name: Rydd opp i databasen (Slett gamle treff)
         run: |
           git config --global user.name "Lovsonar Bot"
           git config --global user.email "bot@noreply.github.com"
           git add -f lovsonar_seen.db
-          # Vi committer, henter nye endringer (pull --rebase), og SÅ pusher vi
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database etter ukesrapport [skip ci]" && git pull --rebase && git push)
+          # Vi henter (pull) før vi pusher for å unngå krasj hvis den andre jobben nettopp lagret noe
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database etter rapport [skip ci]" && git pull --rebase && git push)
