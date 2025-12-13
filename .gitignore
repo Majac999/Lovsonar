@@ -219,5 +219,5 @@ __marimo__/
 nye_saker.json
 lovsonar_seen.db-journal
 
-# VIKTIG: Denne linjen med utropstegn MÅ stå sist for å vinne!
+# VIKTIG: Utropstegnet betyr at vi BEHOLDER databasen
 !lovsonar_seen.db
