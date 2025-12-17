@@ -1,9 +1,3 @@
-Klart det! Her er en "søster-tekst" til LovSonar.
-
-Denne er skrevet med samme profesjonelle struktur, men med fokus på fremtid, strategi og risiko, slik at skillet mellom Radar (Nåtid) og Sonar (Fremtid) blir krystallklart for ledelsen.
-
-Kopier dette rett inn i README.md på LovSonar-repoet ditt:
-
 🔭 LovSonar – Strategisk Fremtidsovervåking & Risikoanalyse
 Et Open Source-verktøy for tidlig varsling av politiske forslag, EU-direktiver og bransjetrender.
 
