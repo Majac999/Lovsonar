@@ -2,7 +2,7 @@
 Et Open Source-verktøy for tidlig varsling av politiske forslag, EU-direktiver og bransjetrender.
 
 🔮 Om prosjektet
-Mens LovRadar passer på lovene som gjelder i dag, er LovSonar designet for å se inn i fremtiden. Dette er et strategisk verktøy for ledelsen i Coop Øst / Obs BYGG. Målet er å fange opp politiske signaler og kommende EU-krav før de blir vedtatt, slik at vi kan omstille oss kostnadseffektivt og unngå panikktiltak.
+Mens LovRadar passer på lovene som gjelder i dag, er LovSonar designet for å se inn i fremtiden. Dette er et strategisk verktøy. Målet er å fange opp politiske signaler og kommende EU-krav før de blir vedtatt, slik at vi kan omstille oss kostnadseffektivt og unngå panikktiltak.
 
 Status: 🟢 Live (Pilotfase)
 
