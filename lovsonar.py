@@ -24,22 +24,30 @@ KEYWORDS = [
     "lavpris", "discount", "billigkjede", "gjør-det-selv", "gds", "diy",
     "maleutstyr", "isolasjon", "varehandel", "konkurransetilsynet",
 
+    # --- Digitalisering, AI & Systemer (NY!) ---
+    "kunstig intelligens", "maskinlæring", "ki", "ai",
+    "digitalisering", "digitaliseringsstrategi", "datadeling",
+    "interoperabilitet", "api", "grensesnitt", "systemintegrasjon",
+    "bim", "bygningsinformasjonsmodellering", "digital tvilling",
+    "digitek", "produktdatabase", "nobbag", "efo", "byggtjeneste",
+    "digitalt produktpass", "dpp", "sporbarhet",
+
     # --- Bærekraft & Sirkulærøkonomi ---
     "bærekraft", "miljøkrav", "sirkulær", "ombruk", "gjenvinning", 
     "avfall", "emballasje", "plastløftet", "klima", "energi",
     "taksonomi", "esg", "grønnvasking", "green claims",
 
-    # --- Spesifikke EU/Norske Regelverk (High Value) ---
+    # --- Spesifikke EU/Norske Regelverk ---
     "eu-direktiv", "forordning", "forskrift", "høringsnotat",
     "åpenhetsloven", "arbeidsmiljøloven", "internkontroll",
-    "ecodesign", "espr", "ppwr", "cbam", "csrd", "csddd", "aktsomhetsdirektiv",
-    "cpr", "byggevareforordning", "reach", "clp", "pfas", # Kjemikalier
-    "eudr", "avskogingsforordningen", # Viktig for trelast!
+    "ecodesign", "espr", "ppwr", "cbam", "csrd", "csddd",
+    "cpr", "byggevareforordning", "reach", "clp", "eudr", 
     "epbd", "bygningsenergidirektiv",
 
-    # --- Norske Instanser/Myndigheter ---
+    # --- Norske Instanser ---
     "miljødirektoratet", "direktoratet for byggkvalitet", "dibk",
-    "forbrukertilsynet", "mattilsynet"
+    "digitaliseringsdirektoratet", "digdir", "datatilsynet"
+]
 ]
 
 RSS_SOURCES = {
