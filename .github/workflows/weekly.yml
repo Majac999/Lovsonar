@@ -1,0 +1,34 @@
+name: Lovsonar - Ukesrapport (E-post)
+
+on:
+  schedule:
+    - cron: '0 7 * * 5'   # Kjører kl 08:00 hver fredag
+  workflow_dispatch:      # Manuell start-knapp for testing
+
+permissions:
+  contents: read          # Trenger bare lese databasen, ikke skrive
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hent kode
+        uses: actions/checkout@v3
+
+      - name: Sett opp Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Installer avhengigheter
+        run: pip install requests feedparser
+
+      - name: Send Ukesrapport
+        env:
+          LOVSONAR_MODE: weekly      # <--- VIKTIG: Denne utløser e-posten!
+          REPORT_WINDOW_DAYS: 7      # Hvor langt tilbake skal vi se?
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          COMPANY_CONTEXT: ${{ secrets.COMPANY_CONTEXT }}
+        run: python lovsonar.py
