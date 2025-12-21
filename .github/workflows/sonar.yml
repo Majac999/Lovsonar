@@ -26,6 +26,11 @@ jobs:
       - name: Kjør Lovsonar (Daglig modus)
         env:
           LOVSONAR_MODE: daily
+          # HER ER DET NYE DU MANGLET:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          COMPANY_CONTEXT: ${{ secrets.COMPANY_CONTEXT }}
         run: python lovsonar.py
 
       - name: Lagre databasen (Commit & Push)
