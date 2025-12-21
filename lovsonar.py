@@ -19,6 +19,9 @@ from html import unescape
 # 0. Konfigurasjon (Oppdatert med Codex-anbefalinger)
 # ===========================================
 KEYWORDS = [
+    "norge",   # <--- LEGG TIL DENNE!
+    # ... resten av listen din ...
+
     "sak",  # <-- LEGG TIL DENNE (Vi fjerner den etterpå!)
     # --- Segment / Varehandel & Lavpris ---
     "byggevarehandel",
