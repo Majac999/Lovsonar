@@ -2,17 +2,19 @@
 Et Open Source-verktøy for tidlig varsling av politiske forslag, EU-direktiver og bransjetrender.
 
 🔮 Om prosjektet
-Mens LovRadar passer på lovene som gjelder i dag, er LovSonar designet for å se inn i fremtiden. Dette er et strategisk verktøy. Målet er å fange opp politiske signaler og kommende EU-krav før de blir vedtatt, slik at vi kan omstille oss kostnadseffektivt og unngå panikktiltak.
+Mens tradisjonelle verktøy (som LovRadar) passer på lovene som gjelder i dag, er LovSonar designet for å se inn i fremtiden. Dette er et strategisk verktøy.
+
+Målet er å fange opp politiske signaler og kommende EU-krav før de blir vedtatt, slik at virksomheter kan omstille seg kostnadseffektivt og unngå panikktiltak.
 
 Status: 🟢 Live (Pilotfase)
 
 🎯 Hva speider verktøyet etter?
-Systemet skanner løpende etter signaler som kan påvirke byggevarehandelens rammevilkår 1–5 år frem i tid. Det ser etter nøkkelord (f.eks. torvuttak, engangsplast, ombruk, digitale produktpass) i tre hovedkanaler:
+Systemet skanner løpende etter signaler som kan påvirke byggevarehandelens og varehandelens rammevilkår 1–5 år frem i tid. Det overvåker spesifikke nøkkelord (f.eks. torvuttak, engangsplast, ombruk, digitale produktpass) i tre hovedkanaler:
 
 1. Norsk Politikk & Lovarbeid 🇳🇴
 Stortingsforslag: Hva foreslår partiene (f.eks. forbud, avgifter)?
 
-Høringer & NOU-er: Offentlige utredninger som ofte blir lov 2 år senere.
+Høringer & NOU-er: Offentlige utredninger som ofte blir lov 1-2 år senere.
 
 Regjeringsplattformer: Signaler om satsingsområder (sirkulærøkonomi, energi).
 
@@ -24,23 +26,38 @@ EØS-notater: Hvilke EU-lover er på vei inn i norsk rett?
 Standardisering: Nye ISO/NS-krav til byggevarer.
 
 3. Bransje & Marked 🏗️
-Bransjeorganisasjoner: Rapporter/utspill fra Virke Handel og NHO Byggenæringen.
+Bransjeorganisasjoner: Rapporter/utspill fra aktører som Virke og NHO.
 
-Konkurranselandskap: Trender innen bærekraft og digitalisering i varehandelen.
+Konkurranselandskap: Trender innen bærekraft, digitalisering og AI i varehandelen.
 
-🤖 Hvordan det virker (AI-analyse)
-Der LovRadar sammenligner tekstlinjer, bruker LovSonar kunstig intelligens (LLM) til å tolke kontekst:
+🤖 Hvordan det virker (Workflow)
+LovSonar er bygget på Python og kjører automatisk via GitHub Actions. Prosessen er todelt:
 
-Fangst: Roboten henter inn nye høringer og forslag.
+Fangst & Filtrering (Python):
 
-Filtrering: Sorterer bort støy (irrelevante saker).
+Roboten henter inn nye RSS-strømmer fra Regjeringen og Stortinget.
 
-Analyse: AI-en vurderer:
+Sorterer bort støy ved hjelp av en definert søkeliste ("Keywords").
+
+Lagrer relevante treff i en database for å unngå duplikater.
+
+Analyse & Strategi (AI-støttet):
+
+Systemet genererer en ukentlig rapport.
+
+Rapporten er klargjort for behandling med LLM (Large Language Model), som vurderer:
 
 Sannsynlighet: Blir dette faktisk lov?
 
-Konsekvens: Treffer dette bunnlinjen eller driften vår?
+Konsekvens: Treffer dette bunnlinjen eller driften?
 
 Tidshorisont: Når må vi være klare?
 
-Rapportering: Leverer en strategisk vurdering: Trussel (Rød) eller Mulighet (Grønn).
+🛠 Teknisk Stack
+Språk: Python 3.10
+
+Database: SQLite
+
+Automasjon: GitHub Actions (Cron jobs)
+
+Varsling: E-post (SMTP) med AI-ready prompts.
