@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from html import unescape
 
 # ===========================================
-# 0. Konfigurasjon (JUKSE-VERSJON FOR TESTING)
+# 0. Konfigurasjon (PRODUKSJON)
 # ===========================================
 KEYWORDS = [
     # --- Segment / Varehandel & Lavpris ---
