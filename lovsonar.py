@@ -19,8 +19,6 @@ from html import unescape
 # 0. Konfigurasjon (JUKSE-VERSJON FOR TESTING)
 # ===========================================
 KEYWORDS = [
-    "norge", "sak",  # <--- Jukse-ordene for å garantere treff nå!
-
     # --- Segment / Varehandel & Lavpris ---
     "byggevarehandel", "byggevarehus", "byggevare", "trelast", "jernvare",
     "lavpris", "discount", "billigkjede", "gjør-det-selv", "gds", "diy",
