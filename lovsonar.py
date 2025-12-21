@@ -48,7 +48,6 @@ KEYWORDS = [
     "miljødirektoratet", "direktoratet for byggkvalitet", "dibk",
     "digitaliseringsdirektoratet", "digdir", "datatilsynet"
 ]
-]
 
 RSS_SOURCES = {
     "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/dokument/eos-notater/rss/",
