@@ -16,21 +16,30 @@ from contextlib import contextmanager
 from html import unescape
 
 # ===========================================
-# 0. Konfigurasjon
+# 0. Konfigurasjon (Oppdatert med Codex-anbefalinger)
 # ===========================================
 KEYWORDS = [
-    # Økonomi & Tech
-    "bank", "finans", "teknologi", "digital", "kunstig intelligens",
-    "krypto", "hvitvasking", "personvern", "ai act",
-    
-    # Bærekraft & Miljø (Utvidet)
-    "bærekraft", "eu-direktiv", "forordning", "klima", "energi",
-    "taksonomi", "biodiversitet", "naturavtale", "utslipp",
-    "sirkulær", "ombruk", "gjenvinning", "miljøkrav",
-    
-    # Handel & Bygg
-    "arbeidsmiljø", "emballasje", "avfall", "forbruker",
-    "byggevare", "trelast", "kjemikalie", "esg", "csrd", "åpenhetsloven"
+    # --- Segment / Varehandel & Lavpris ---
+    "byggevarehandel", "byggevarehus", "byggevare", "trelast", "jernvare",
+    "lavpris", "discount", "billigkjede", "gjør-det-selv", "gds", "diy",
+    "maleutstyr", "isolasjon", "varehandel", "konkurransetilsynet",
+
+    # --- Bærekraft & Sirkulærøkonomi ---
+    "bærekraft", "miljøkrav", "sirkulær", "ombruk", "gjenvinning", 
+    "avfall", "emballasje", "plastløftet", "klima", "energi",
+    "taksonomi", "esg", "grønnvasking", "green claims",
+
+    # --- Spesifikke EU/Norske Regelverk (High Value) ---
+    "eu-direktiv", "forordning", "forskrift", "høringsnotat",
+    "åpenhetsloven", "arbeidsmiljøloven", "internkontroll",
+    "ecodesign", "espr", "ppwr", "cbam", "csrd", "csddd", "aktsomhetsdirektiv",
+    "cpr", "byggevareforordning", "reach", "clp", "pfas", # Kjemikalier
+    "eudr", "avskogingsforordningen", # Viktig for trelast!
+    "epbd", "bygningsenergidirektiv",
+
+    # --- Norske Instanser/Myndigheter ---
+    "miljødirektoratet", "direktoratet for byggkvalitet", "dibk",
+    "forbrukertilsynet", "mattilsynet"
 ]
 
 RSS_SOURCES = {
@@ -45,7 +54,7 @@ OUTPUT_FILE = "nye_treff.json"
 DEFAULT_REPORT_DAYS = 7
 
 HEADERS = {
-    "User-Agent": "Lovsonar/5.1 (+https://github.com/Majac999/Lovsonar)"
+    "User-Agent": "Lovsonar/5.3 (+https://github.com/Majac999/Lovsonar)"
 }
 
 logging.basicConfig(
@@ -56,7 +65,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===========================================
-# 1. Hjelpefunksjoner (Tekst & Nettverk)
+# 1. Hjelpefunksjoner (Tekst, Nettverk & Kontekst)
 # ===========================================
 def clean_html(text):
     """Fjerner HTML-tags og rydder i whitespace for bedre søk."""
@@ -87,6 +96,19 @@ def get_http_session():
     session.mount("https://", adapter)
     session.headers.update(HEADERS)
     return session
+
+def get_company_profile():
+    """
+    Henter bedriftens anonyme profil (DNA) fra sikker lagring (GitHub Secrets).
+    Dette gjør at AI kan analysere saker med riktig kontekst uten at vi røper hvem vi er i koden.
+    """
+    profile = os.environ.get("COMPANY_CONTEXT")
+    
+    if not profile:
+        # Fallback tekst hvis Secret mangler
+        return "Generisk norsk handelsbedrift innen byggevarer og lavpris."
+    
+    return profile
 
 # ===========================================
 # 2. Database (Sikker håndtering)
@@ -158,7 +180,7 @@ def log_weekly_hit(item):
         conn.commit()
 
 def purge_old_data(max_age_days=180):
-    """Rydder opp i gamle data (både 'sett'-logg og rapport-hits)."""
+    """Rydder opp i gamle data."""
     cutoff = (datetime.utcnow() - timedelta(days=max_age_days)).isoformat()
     with get_db_connection() as conn:
         conn.execute("DELETE FROM seen_items WHERE date_seen < ?", (cutoff,))
@@ -195,7 +217,7 @@ def send_email(emne, tekst):
         return False
 
 # ===========================================
-# 4. RSS-kilder (Med HTML-vask)
+# 4. RSS-kilder
 # ===========================================
 def check_rss_feed(source_name, url):
     logger.info("📡 Sjekker RSS: %s", source_name)
@@ -211,7 +233,8 @@ def check_rss_feed(source_name, url):
             if not item_id or is_seen(item_id):
                 continue
 
-            # HTML-vask før søk
+            # Dato-sjekk kan legges inn her ved behov, men seen-databasen håndterer duplikater.
+            
             raw_title = entry.get("title", "").strip()
             raw_desc = (entry.get("description") or entry.get("summary") or "").strip()
             
@@ -234,7 +257,7 @@ def check_rss_feed(source_name, url):
     return entries
 
 # ===========================================
-# 5. Stortinget API (Smartere filter)
+# 5. Stortinget API
 # ===========================================
 def get_current_session(session):
     try:
@@ -261,19 +284,17 @@ def get_stortinget_api():
 
         for sak in data.get("saker_liste", []):
             try:
-                # --- FILTERING ---
                 dok_gruppe = str(sak.get("dokumentgruppe") or "").lower()
                 status = str(sak.get("status") or "").lower()
                 
-                # 1. Fjern støy
+                # Filter 1: Fjern støy
                 if any(x in dok_gruppe for x in ["dokument 12", "spørsmål", "interpellasjon", "referat"]):
                     continue
 
-                # 2. Inkluder det viktige (Prop, Innst, Melding, Dok 8, Lovsak)
+                # Filter 2: Behold viktige dokumenttyper
                 relevante_typer = ["proposisjon", "innstilling", "melding", "dokument 8", "dok 8", "lovsak"]
                 if not any(x in dok_gruppe for x in relevante_typer) and "lovsak" not in status:
                     continue
-                # ---------------
 
                 sak_id = f"{session_id}-{sak.get('id', '')}"
                 title = sak.get("tittel", "") or ""
@@ -322,10 +343,9 @@ def fetch_report_hits(days):
 def run_daily():
     logger.info("=== 🟢 Starter Lovsonar (Daglig) ===")
     setup_database()
-    purge_old_data() # Rydder nå opp både seen og weekly_hits
+    purge_old_data()
 
     hits = []
-
     for name, url in RSS_SOURCES.items():
         hits.extend(check_rss_feed(name, url))
 
@@ -334,7 +354,6 @@ def run_daily():
     for item in hits:
         log_weekly_hit(item)
 
-    # Lagre JSON
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump({"count": len(hits), "items": hits}, f, ensure_ascii=False, indent=2)
 
@@ -349,10 +368,20 @@ def run_weekly(days):
 
     rows = fetch_report_hits(days=days)
     if rows:
-        tekst = f"Lovsonar-rapport ({len(rows)} funn, siste {days} dager)\n\n"
+        # Bygger e-posten
+        tekst = f"Lovsonar-rapport ({len(rows)} funn, siste {days} dager)\n"
+        tekst += "=" * 50 + "\n\n"
+        
         for row in rows:
             tekst += f"- {row[0]}: {row[1]}\n  Lenke: {row[3]}\n\n"
         
+        # Inkluderer strategien (Context) for AI-analyse
+        tekst += "\n" + "=" * 50 + "\n"
+        tekst += "--- FOR AI ANALYSE (KOPIER MED INN I CHATGPT) ---\n"
+        tekst += "ANALYSE-KONTEKST:\n"
+        tekst += get_company_profile()
+        tekst += "\n\nOPPGAVE: Analyser sakene over basert på konteksten under."
+
         send_email(f"Lovsonar Ukesblikk ({len(rows)} saker)", tekst)
         logger.info("Rapport sendt.")
     else:
