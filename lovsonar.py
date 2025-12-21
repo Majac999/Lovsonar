@@ -19,6 +19,9 @@ from html import unescape
 # 0. Konfigurasjon (Oppdatert med Codex-anbefalinger)
 # ===========================================
 KEYWORDS = [
+    "sak",  # <-- LEGG TIL DENNE (Vi fjerner den etterpå!)
+    # --- Segment / Varehandel & Lavpris ---
+    "byggevarehandel",
     # --- Segment / Varehandel & Lavpris ---
     "byggevarehandel", "byggevarehus", "byggevare", "trelast", "jernvare",
     "lavpris", "discount", "billigkjede", "gjør-det-selv", "gds", "diy",
