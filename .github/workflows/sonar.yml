@@ -23,7 +23,7 @@ jobs:
 
       - name: Installer biblioteker
         run: |
-          pip install -r requirements.txt
+          pip install requests feedparser beautifulsoup4 pypdf urllib3
 
       - name: Kjør LovSonar
         env:
