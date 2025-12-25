@@ -1,4 +1,5 @@
 requests
 feedparser
+beautifulsoup4
 pypdf
 urllib3
