@@ -14,6 +14,7 @@ from html import unescape
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import re
+from bs4 import BeautifulSoup # Vi bruker denne for å lese nettsider direkte
 
 # Sjekker om pdf_leser.py ligger i mappen
 try:
@@ -42,23 +43,13 @@ KW_TOPIC = [
     "arbeidsmiljøloven", "avhendingslova", "plan- og bygningsloven"
 ]
 
-# KILDER
-# Vi bruker faste ID-er som hovedregel.
-RSS_SOURCES = {
-    "📢 Høringer": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
-    "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
-    "📜 Prop/Meld": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
-    "🇪🇺 EØS": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
-}
-
 DB_PATH = "lovsonar_seen.db"
 
-# HER ER ENDRINGEN: Vi later som vi er en helt vanlig Chrome-nettleser
+# Vi bruker vanlige Headers for å se ut som en nettleser
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "no-NO,no;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer": "https://www.regjeringen.no/"
+    "Accept-Language": "no-NO,no;q=0.9,en-US;q=0.8,en;q=0.7"
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -74,7 +65,6 @@ def get_http_session():
     adapter = HTTPAdapter(max_retries=retry)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    # Oppdaterer med alle de nye headersene
     session.headers.update(HEADERS)
     return session
 
@@ -195,40 +185,58 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
 # 5. INNSAMLING
 # ===========================================
 
-def check_rss_feeds():
-    session = get_http_session()
+def check_regjeringen_html():
+    """
+    Siden RSS gir 404, leser vi HTML-siden direkte.
+    Dette omgår blokkeringen.
+    """
+    url = "https://www.regjeringen.no/no/aktuelt/horinger/id1763/"
+    name = "📢 Regjeringen (Nettside)"
+    logger.info(f"🌐 Sjekker {name} via HTML-skraping...")
     
-    for name, url in RSS_SOURCES.items():
-        logger.info(f"📡 Sjekker {name}...")
-        try:
-            # Last ned innholdet med requests først for å bruke våre Headers
-            response = session.get(url, timeout=15)
+    session = get_http_session()
+    try:
+        res = session.get(url, timeout=15)
+        res.raise_for_status()
+        
+        soup = BeautifulSoup(res.content, "html.parser")
+        
+        # Finn alle lenker som ser ut som høringer (inneholder "Høring" i tittelen)
+        # Dette er litt "grovere" enn RSS, men det virker.
+        links = soup.find_all("a", href=True)
+        
+        count = 0
+        for link in links:
+            tittel = link.get_text().strip()
+            url_part = link['href']
             
-            if response.status_code == 404:
-                logger.warning(f"⚠️ Kilde ikke funnet (404): {name}. Blokkert av server eller feil URL.")
+            # Filtrer bort støy
+            if len(tittel) < 10 or "høring" not in tittel.lower():
                 continue
             
-            # Gi innholdet til feedparser
-            feed = feedparser.parse(response.content)
-            
-            if not feed.entries:
-                logger.info(f"   Ingen nye saker i feeden: {name}")
+            # Lag full URL
+            if url_part.startswith("/"):
+                full_url = "https://www.regjeringen.no" + url_part
+            else:
+                full_url = url_part
 
-            for entry in feed.entries:
-                item_id = entry.get("id") or entry.get("guid") or entry.get("link")
-                raw_desc = entry.get("summary") or entry.get("description") or ""
-                pub_date = get_publish_date(entry)
-                
-                analyze_item(
-                    source_name=name,
-                    title=clean_text(entry.get("title", "")),
-                    description=clean_text(raw_desc),
-                    link=entry.get("link", ""),
-                    pub_date=pub_date,
-                    item_id=item_id
-                )
-        except Exception as e:
-            logger.error(f"❌ Feil ved lesing av RSS {name}: {e}")
+            item_id = full_url # Bruker URL som ID
+            
+            # Vi analyserer
+            analyze_item(
+                source_name=name,
+                title=tittel,
+                description="Hentet fra nettsiden. Sjekk lenken for detaljer.",
+                link=full_url,
+                pub_date=datetime.utcnow(),
+                item_id=item_id
+            )
+            count += 1
+            
+        logger.info(f"   Fant {count} mulige saker på nettsiden.")
+            
+    except Exception as e:
+        logger.error(f"❌ Feil ved lesing av nettside: {e}")
 
 def check_stortinget():
     logger.info("🏛️ Sjekker Stortinget (API)...")
@@ -344,6 +352,5 @@ if __name__ == "__main__":
         send_weekly_report()
     else:
         logger.info("Kjører daglig innsamling...")
-        # VIKTIG: Vi sjekker Stortinget først, siden den er mest robust
-        check_stortinget()
-        check_rss_feeds()
+        check_stortinget()       # Dette virker allerede!
+        check_regjeringen_html() # Ny metode som leser nettsiden direkte
