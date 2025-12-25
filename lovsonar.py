@@ -26,6 +26,7 @@ except ImportError:
 # 1. KONFIGURASJON
 # ===========================================
 
+# Nøkkelord for BRANSJE (Må ha minst én av disse)
 KW_SEGMENT = [
     "byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", 
     "discount", "billigkjede", "gjør-det-selv", "gds", "diy", 
@@ -33,24 +34,28 @@ KW_SEGMENT = [
     "varehandel", "konkurransetilsynet", "samvirkelag", "coop"
 ]
 
+# Nøkkelord for TEMA (Må OGSÅ ha minst én av disse)
 KW_TOPIC = [
     "bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", 
     "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", 
     "aktsomhet", "green claims", "grønnvasking", "reach", "clp", 
     "pfas", "eudr", "epbd", "byggevareforordning", "cpr", 
-    "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp"
+    "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp",
+    "arbeidsmiljøloven", "avhendingslova", "plan- og bygningsloven"
 ]
 
-# RSS-LENKER (Ferdig oppsatt med Høringer, NOU, Prop og Meldinger)
+# KILDER: Vi bruker FASTE ID-er fra Regjeringen (de er stabile)
 RSS_SOURCES = {
-    "📢 Høringer": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
-    "📚 NOU (Utredninger)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
-    "📜 Lovforslag & Meldinger": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
-    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
+    "📢 Regjeringen (Høringer)": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
+    "📚 Regjeringen (NOU)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
+    "📜 Regjeringen (Prop/Meld)": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
+    "🇪🇺 Regjeringen (EØS)": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/2.1 (Internal Compliance Tool)"
+
+# "Forkledning" som nettleser for å unngå 404/blokkering
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -189,20 +194,29 @@ def check_rss_feeds():
     for name, url in RSS_SOURCES.items():
         logger.info(f"📡 Sjekker {name}...")
         try:
-            feed = feedparser.parse(url, request_headers={"User-Agent": USER_AGENT})
+            # Bruker session for å få med "User-Agent" forkledningen
+            session = get_http_session()
+            response = session.get(url, timeout=10)
             
-            if hasattr(feed, "status") and feed.status >= 400:
-                logger.error(f"❌ HTTP feil mot {name}: {feed.status}")
+            if response.status_code == 404:
+                logger.warning(f"⚠️ Kilde ikke funnet (404): {name}. Hopper over.")
                 continue
+            
+            # Mater innholdet direkte til feedparser
+            feed = feedparser.parse(response.content)
+            
+            if not feed.entries:
+                logger.info(f"   Ingen nye saker i feeden: {name}")
 
             for entry in feed.entries:
-                item_id = entry.get("guid") or entry.get("link")
+                item_id = entry.get("id") or entry.get("guid") or entry.get("link")
+                raw_desc = entry.get("summary") or entry.get("description") or ""
                 pub_date = get_publish_date(entry)
                 
                 analyze_item(
                     source_name=name,
                     title=clean_text(entry.get("title", "")),
-                    description=clean_text(entry.get("description", "")),
+                    description=clean_text(raw_desc),
                     link=entry.get("link", ""),
                     pub_date=pub_date,
                     item_id=item_id
@@ -211,20 +225,25 @@ def check_rss_feeds():
             logger.error(f"❌ Feil ved lesing av RSS {name}: {e}")
 
 def check_stortinget():
-    logger.info("🏛️ Sjekker Stortinget...")
+    logger.info("🏛️ Sjekker Stortinget (API)...")
     session = get_http_session()
     
     try:
+        # Henter sesjonID automatisk
         res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=10)
         res.raise_for_status()
         sid = res.json()["innevaerende_sesjon"]["id"]
         
+        # Henter saker for denne sesjonen
         res_saker = session.get(f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&format=json", timeout=10)
         res_saker.raise_for_status()
         data = res_saker.json()
         
+        logger.info(f"   Fant {len(data.get('saker_liste', []))} saker på Stortinget. Analyserer...")
+
         for sak in data.get("saker_liste", []):
             dg = str(sak.get("dokumentgruppe") or "").lower()
+            # Hopper over spørretimen etc.
             if any(x in dg for x in ["spørsmål", "interpellasjon", "referat", "skriftlig"]): 
                 continue
                 
@@ -295,30 +314,4 @@ def send_weekly_report():
         msg["To"] = email_to
 
         try:
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as server:
-                server.login(email_user, email_pass)
-                server.send_message(msg)
-            logger.info("📧 Rapport sendt!")
-        except Exception as e:
-            logger.error(f"Feil ved sending: {e}")
-    else:
-        logger.warning("Mangler e-post oppsett. Printer rapport til logg.")
-        print(full_msg)
-
-# ===========================================
-# MAIN
-# ===========================================
-
-if __name__ == "__main__":
-    setup_database()
-    purge_old_data()
-    
-    mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
-    
-    if mode == "weekly":
-        logger.info("Kjører ukesrapport...")
-        send_weekly_report()
-    else:
-        logger.info("Kjører daglig innsamling...")
-        check_rss_feeds()
-        check_stortinget()
+            with smtplib.SMTP
