@@ -13,7 +13,7 @@ from html import unescape
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import re
-from bs4 import BeautifulSoup # Brukes for å lese nettsider som et menneske
+from bs4 import BeautifulSoup # Nødvendig for å lese nettsiden direkte
 
 # Sjekker om pdf_leser.py ligger i mappen
 try:
@@ -44,7 +44,7 @@ KW_TOPIC = [
 
 DB_PATH = "lovsonar_seen.db"
 
-# Vi later som vi er en vanlig Chrome-nettleser
+# Headers som får boten til å se ut som en ekte nettleser
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -55,7 +55,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # ===========================================
-# 2. NETTVERK & HJELPEFUNKSJONER
+# 2. HJELPEFUNKSJONER
 # ===========================================
 
 def get_http_session():
@@ -66,6 +66,12 @@ def get_http_session():
     session.mount("https://", adapter)
     session.headers.update(HEADERS)
     return session
+
+def clean_text(text):
+    if not text: return ""
+    text = unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return " ".join(text.split()).strip()
 
 def matches_composite_logic(text):
     if not text: return False
@@ -170,17 +176,16 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
             conn.commit()
 
 # ===========================================
-# 5. INNSAMLING (Stortinget + Web Scraping)
+# 5. INNSAMLING (Stortinget API + Regjeringen Web)
 # ===========================================
 
 def check_regjeringen_nettside():
     """
-    Henter høringer direkte fra nettsiden (HTML) i stedet for RSS.
-    Dette omgår 404-feilene.
+    Henter høringer direkte fra nettsiden (HTML) siden RSS er blokkert.
     """
     url = "https://www.regjeringen.no/no/aktuelt/horinger/id1763/"
-    source_name = "📢 Regjeringen (Web)"
-    logger.info(f"🌐 Sjekker {source_name}...")
+    name = "📢 Regjeringen (Høringer)"
+    logger.info(f"🌐 Sjekker {name} via nettsiden...")
     
     session = get_http_session()
     try:
@@ -189,35 +194,44 @@ def check_regjeringen_nettside():
         
         soup = BeautifulSoup(res.content, "html.parser")
         
-        # Finn alle lenker inne i hovedinnholdet
-        # Regjeringen bruker ofte klasser som 'teaser' eller lister
-        main_content = soup.find(id="mainContent") or soup
-        links = main_content.find_all("a", href=True)
+        # Finn listen med dokumenter. Regjeringen bruker ofte <h3> med class "a-text-title"
+        # eller lenker inne i en liste. Vi søker bredt for å være sikre.
+        links = soup.find_all("h3", class_="a-text-title")
         
+        if not links:
+            # Fallback hvis de endrer design: finn alle lenker i hovedinnholdet
+            main_content = soup.find(id="mainContent") or soup
+            links = main_content.find_all("a", href=True)
+
         count = 0
-        for link in links:
-            tittel = link.get_text().strip()
-            href = link['href']
+        for element in links:
+            # Hvis elementet er en h3, må vi finne lenken inni
+            link_tag = element.find("a") if element.name != "a" else element
             
-            # Enkel sjekk for å se om dette er en relevant lenke
-            if len(tittel) < 5 or "javascript" in href:
+            if not link_tag or not link_tag.has_attr('href'):
                 continue
 
+            tittel = link_tag.get_text().strip()
+            href = link_tag['href']
+            
+            # Filtrer bort meny-lenker og støy
+            if len(tittel) < 10 or "javascript" in href:
+                continue
+                
             # Lag full URL
             if href.startswith("/"):
                 full_url = "https://www.regjeringen.no" + href
             else:
                 full_url = href
             
-            # Sjekk at lenken peker til et dokument/sak
+            # Sjekk at lenken ser ut som en sak
             if "/id" not in full_url and "/dokumenter/" not in full_url:
                 continue
 
-            # Bruker URL som unik ID
-            item_id = full_url
+            item_id = full_url # Bruker URL som unik ID
             
             analyze_item(
-                source_name=source_name,
+                source_name=name,
                 title=tittel,
                 description="Hentet fra Regjeringen.no",
                 link=full_url,
@@ -236,112 +250,4 @@ def check_stortinget():
     session = get_http_session()
     
     try:
-        res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=10)
-        res.raise_for_status()
-        sid = res.json()["innevaerende_sesjon"]["id"]
-        
-        res_saker = session.get(f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&format=json", timeout=10)
-        res_saker.raise_for_status()
-        data = res_saker.json()
-        
-        logger.info(f"   Fant {len(data.get('saker_liste', []))} saker på Stortinget. Analyserer...")
-
-        for sak in data.get("saker_liste", []):
-            dg = str(sak.get("dokumentgruppe") or "").lower()
-            if any(x in dg for x in ["spørsmål", "interpellasjon", "referat", "skriftlig"]): 
-                continue
-                
-            item_id = f"STORTINGET-{sak['id']}"
-            tittel = sak.get("tittel", "")
-            tema = sak.get("tema", "") or ""
-            
-            analyze_item(
-                source_name="🏛️ Stortingssak",
-                title=tittel,
-                description=f"Type: {dg}. Tema: {tema}.",
-                link=f"https://stortinget.no/sak/{sak['id']}",
-                pub_date=datetime.utcnow(),
-                item_id=item_id
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Feil mot Stortinget API: {e}")
-
-# ===========================================
-# 6. RAPPORTERING
-# ===========================================
-
-def send_weekly_report():
-    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("""
-            SELECT source, title, link, excerpt, pub_date 
-            FROM weekly_hits 
-            WHERE detected_at >= ? 
-            ORDER BY pub_date DESC
-        """, (cutoff,)).fetchall()
-
-    if not rows:
-        logger.info("Ingen treff denne uken.")
-        return
-
-    md_text = [f"# 🛡️ LovSonar: {len(rows)} treff"]
-    md_text.append(f"Rapportdato: {datetime.now().strftime('%d.%m.%Y')}\n")
-
-    for r in rows:
-        source, title, link, excerpt, pdate = r
-        try: d_str = datetime.fromisoformat(pdate).strftime('%d.%m')
-        except: d_str = "N/A"
-        
-        md_text.append(f"## {title}")
-        md_text.append(f"**Kilde:** {source} | **Dato:** {d_str}")
-        md_text.append(f"[Les saken]({link})\n")
-        md_text.append(f"> {excerpt[:800]}...\n")
-        md_text.append("---")
-
-    company_context = os.environ.get("COMPANY_CONTEXT", "Ingen profil funnet.")
-    md_text.append("\n### 🤖 ANALYSE-KONTEKST (Kopier til AI)")
-    md_text.append(company_context)
-    md_text.append("\n**OPPGAVE:** Analyser sakene over. Påvirker dette Obs BYGG/Coop?")
-
-    full_msg = "\n".join(md_text)
-    
-    email_user = os.environ.get("EMAIL_USER")
-    email_pass = os.environ.get("EMAIL_PASS")
-    email_to = os.environ.get("EMAIL_RECIPIENT", email_user)
-
-    if email_user and email_pass:
-        msg = MIMEText(full_msg, "plain", "utf-8")
-        msg["Subject"] = Header(f"LovSonar: {len(rows)} treff", "utf-8")
-        msg["From"] = email_user
-        msg["To"] = email_to
-
-        try:
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as server:
-                server.login(email_user, email_pass)
-                server.send_message(msg)
-            logger.info("📧 Rapport sendt!")
-        except Exception as e:
-            logger.error(f"Feil ved sending: {e}")
-    else:
-        logger.warning("Mangler e-post oppsett. Printer rapport til logg.")
-        print(full_msg)
-
-# ===========================================
-# MAIN
-# ===========================================
-
-if __name__ == "__main__":
-    setup_database()
-    purge_old_data()
-    
-    mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
-    
-    if mode == "weekly":
-        logger.info("Kjører ukesrapport...")
-        send_weekly_report()
-    else:
-        logger.info("Kjører daglig innsamling...")
-        check_stortinget()       # Fungerer perfekt!
-        check_regjeringen_nettside() # Ny metode som omgår RSS-feil
+        res = session.get("
