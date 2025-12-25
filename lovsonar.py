@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-LovSonar – Robust versjon.
-Bruker Stortinget API (fungerer) + Regjeringen Nettside-lesing (unngår 404).
-"""
-
 import logging
 import sqlite3
 import requests
