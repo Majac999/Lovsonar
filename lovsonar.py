@@ -41,7 +41,7 @@ KW_TOPIC = [
     "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp"
 ]
 
-# HER ER DE NYE LENKENE SOM FUNGERE:
+# HER ER DE NYE, KORREKTE LENKENE:
 RSS_SOURCES = {
     "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss",
     "📚 NOU (Utredning)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
