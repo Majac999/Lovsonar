@@ -21,12 +21,12 @@ jobs:
           python-version: '3.10'
 
       - name: Installer avhengigheter
-        run: pip install requests feedparser
+        # ENDRING: La til 'pypdf' her for PDF-leseren
+        run: pip install requests feedparser pypdf
 
       - name: Kjør Lovsonar (Daglig modus)
         env:
           LOVSONAR_MODE: daily
-          # --- HER ER DET SOM MANGLET: ---
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
