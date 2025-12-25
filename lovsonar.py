@@ -18,6 +18,7 @@ from html import unescape
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup  # krever bs4
+import feedparser
 
 # Prøv å importere pdf_leser (valgfritt)
 try:
@@ -48,12 +49,28 @@ KW_TOPIC = [
 
 DB_PATH = "lovsonar_seen.db"
 
-# Regjeringen har endret RSS-endepunkter; legg til ?rss=true
-RSS_SOURCES = {
-    "📢 Høringer": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/?rss=true",
-    "📚 NOU (Utredninger)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?rss=true",
-    "📜 Lovforslag/Prop": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?rss=true",
-    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/?rss=true",
+# RSS-kandidat-URLer per kilde (prøv i rekkefølge)
+RSS_CANDIDATES = {
+    "📢 Høringer": [
+        "https://www.regjeringen.no/no/aktuelt/hoyringar/id1763/?rss=true",
+        "https://www.regjeringen.no/no/aktuelt/horinger/id1763/?rss=true",
+        "https://www.regjeringen.no/no/aktuelt/hoyringar/id1763/?ep=RSS",
+        "https://www.regjeringen.no/no/aktuelt/horinger/id1763/?ep=RSS",
+    ],
+    "📚 NOU (Utredninger)": [
+        "https://www.regjeringen.no/no/dokument/nou-ar/id1767/?rss=true",
+        "https://www.regjeringen.no/no/dokument/nou-er/id1767/?rss=true",
+        "https://www.regjeringen.no/no/dokument/nou-ar/id1767/?ep=RSS",
+        "https://www.regjeringen.no/no/dokument/nou-er/id1767/?ep=RSS",
+    ],
+    "📜 Lovforslag/Prop": [
+        "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?rss=true",
+        "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?ep=RSS",
+    ],
+    "🇪🇺 EØS-notater": [
+        "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/?rss=true",
+        "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/?ep=RSS",
+    ],
 }
 
 HEADERS = {
@@ -164,7 +181,7 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
     full_text = f"{title} {description}"
     excerpt = description[:300] + "..."
 
-    # PDF-sjekk: kun hvis lenken tydelig er PDF
+    # PDF-sjekk: bare hvis lenken ender på .pdf
     should_check_pdf = pdf_leser and link.lower().endswith(".pdf")
 
     if should_check_pdf:
@@ -174,7 +191,7 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
             if tilleggs_tekst and "FEIL" not in tilleggs_tekst:
                 full_text += " " + tilleggs_tekst
                 excerpt = f"[PDF]: {tilleggs_tekst[:600]}..."
-                time.sleep(1)  # høflighet / rate-limit
+                time.sleep(1)  # høflighet
             else:
                 logger.warning("   ⚠️ PDF ga tomt eller feil resultat: %s", link)
         except Exception as e:
@@ -203,42 +220,49 @@ def get_publish_date(entry):
         return datetime(*entry.published_parsed[:6])
     return datetime.utcnow()
 
-def check_rss_feeds():
-    session = get_http_session()
-    for name, url in RSS_SOURCES.items():
-        logger.info("📡 Sjekker %s ...", name)
+def fetch_rss_with_candidates(name, candidates, session):
+    """Prøv flere URLer til en feed; returner feed (eller None)."""
+    for url in candidates:
         try:
             resp = session.get(url, timeout=15)
             if resp.status_code == 404:
-                logger.warning("⚠️ Kilde ikke funnet (404): %s. Hopper over.", name)
                 continue
             feed = feedparser.parse(resp.content)
             if getattr(feed, "bozo", False):
-                logger.warning("⚠️ RSS-feil på %s: %s", name, feed.bozo_exception)
-            if not feed.entries:
-                logger.info("   Ingen nye saker i feeden: %s", name)
                 continue
-            for entry in feed.entries:
-                item_id = entry.get("id") or entry.get("guid") or entry.get("link")
-                raw_desc = entry.get("summary") or entry.get("description") or ""
-                pub_date = get_publish_date(entry)
-                analyze_item(
-                    source_name=name,
-                    title=clean_text(entry.get("title", "")),
-                    description=clean_text(raw_desc),
-                    link=entry.get("link", ""),
-                    pub_date=pub_date,
-                    item_id=item_id,
-                )
-        except Exception as e:
-            logger.error("❌ Feil ved lesing av RSS %s: %s", name, e)
+            if feed.entries:
+                return feed
+        except Exception:
+            continue
+    return None
+
+def check_rss_feeds():
+    session = get_http_session()
+    for name, candidates in RSS_CANDIDATES.items():
+        logger.info("📡 Sjekker %s ...", name)
+        feed = fetch_rss_with_candidates(name, candidates, session)
+        if not feed:
+            logger.warning("⚠️ Fant ingen fungerende RSS for %s. Hopper over.", name)
+            continue
+        for entry in feed.entries:
+            item_id = entry.get("id") or entry.get("guid") or entry.get("link")
+            raw_desc = entry.get("summary") or entry.get("description") or ""
+            pub_date = get_publish_date(entry)
+            analyze_item(
+                source_name=name,
+                title=clean_text(entry.get("title", "")),
+                description=clean_text(raw_desc),
+                link=entry.get("link", ""),
+                pub_date=pub_date,
+                item_id=item_id,
+            )
 
 def check_regjeringen_nettside():
     """
     Fallback: henter høringer via HTML om RSS ikke fungerer.
     """
     url = "https://www.regjeringen.no/no/aktuelt/horinger/id1763/"
-    name = "📢 Regjeringen (Høringer)"
+    name = "📢 Regjeringen (Høringer) HTML"
     logger.info(f"🌐 Sjekker {name} via nettsiden...")
     session = get_http_session()
     try:
@@ -400,8 +424,8 @@ def send_weekly_report():
 def main():
     setup_database()
     purge_old_data()
-    check_rss_feeds()           # prøver RSS
-    check_regjeringen_nettside()  # fallback HTML for høringer
+    check_rss_feeds()            # prøver RSS (med kandidater)
+    check_regjeringen_nettside() # fallback HTML for høringer
     check_stortinget()
     send_weekly_report()
 
