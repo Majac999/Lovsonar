@@ -6,7 +6,7 @@ import os
 import sys
 import smtplib
 import time
-import requests # Må importeres for session/retry
+import requests
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.header import Header
@@ -41,11 +41,12 @@ KW_TOPIC = [
     "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp"
 ]
 
+# HER ER DE NYE LENKENE SOM FUNGERE:
 RSS_SOURCES = {
-    "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/dokument/eos-notater/rss/",
-    "📚 NOU (Utredning)": "https://www.regjeringen.no/no/dokument/nou-er/rss/",
-    "📢 Høring": "https://www.regjeringen.no/no/dokument/horinger/rss/",
-    "📜 Lovforslag/Prop": "https://www.regjeringen.no/no/dokument/proposisjoner/rss/"
+    "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss",
+    "📚 NOU (Utredning)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
+    "📢 Høring": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
+    "📜 Lovforslag/Prop": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss"
 }
 
 DB_PATH = "lovsonar_seen.db"
@@ -77,8 +78,6 @@ def clean_text(text):
 def matches_composite_logic(text):
     if not text: return False
     text_lower = text.lower()
-    # Bruker ordgrenser (\b) kan være strengt, så vi beholder 'in' for fleksibilitet,
-    # men du kan vurdere regex for presisjon hvis du får mye støy.
     has_segment = any(k in text_lower for k in KW_SEGMENT)
     has_topic = any(k in text_lower for k in KW_TOPIC)
     return has_segment and has_topic
@@ -93,7 +92,7 @@ def is_old(date_obj, days=90):
     return date_obj < limit
 
 # ===========================================
-# 3. DATABASE (Oppgradert)
+# 3. DATABASE
 # ===========================================
 
 def setup_database():
@@ -118,10 +117,9 @@ def setup_database():
                 detected_at TEXT
             )
         """)
-        conn.commit() # VIKTIG: Sikrer at tabellene lagres
+        conn.commit()
 
 def purge_old_data(days_to_keep=180):
-    """Vaktmester: Sletter gamle data for å spare plass."""
     cutoff = (datetime.utcnow() - timedelta(days=days_to_keep)).isoformat()
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM seen_items WHERE date_seen < ?", (cutoff,))
@@ -147,15 +145,14 @@ def register_hit(item_id, source, title, desc, link, pub_date, excerpt):
 # ===========================================
 
 def analyze_item(source_name, title, description, link, pub_date, item_id):
-    if not item_id: return # Hopp over ugyldige items
-    
+    if not item_id: return 
     if is_old(pub_date, days=180): return
     if is_seen(item_id): return
 
     full_text = f"{title} {description}"
     excerpt = description[:300] + "..."
 
-    # PDF-Sjekk: Kun hvis det ser ut som en PDF eller vi har sterk mistanke
+    # PDF-Sjekk
     should_check_pdf = pdf_leser and (
         link.lower().endswith(".pdf") or 
         "høring" in title.lower() or 
@@ -164,24 +161,19 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
 
     if should_check_pdf:
         logger.info(f"   🔎 Sjekker PDF innhold: {title[:30]}...")
-        # Henter PDF tekst (pdf_leser må håndtere feil internt)
         tilleggs_tekst = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
         
         if tilleggs_tekst and "FEIL" not in tilleggs_tekst:
             full_text += " " + tilleggs_tekst
             excerpt = f"[PDF]: {tilleggs_tekst[:600]}..."
-            time.sleep(1) # Rate limit
+            time.sleep(1)
 
     if matches_composite_logic(full_text):
         logger.info(f"✅ TREFF! {title}")
-        
-        # Flagg spesielle typer
         if "høring" in title.lower(): title = "📢 [HØRING] " + title
         if "proposisjon" in title.lower(): title = "📜 [PROP] " + title
-        
         register_hit(item_id, source_name, title, description, link, pub_date, excerpt)
     else:
-        # Merk som sett (støy)
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)", 
                          (str(item_id), source_name, title, datetime.utcnow().isoformat()))
@@ -195,10 +187,8 @@ def check_rss_feeds():
     for name, url in RSS_SOURCES.items():
         logger.info(f"📡 Sjekker {name}...")
         try:
-            # Sender med User-Agent også til feedparser (via request_headers)
             feed = feedparser.parse(url, request_headers={"User-Agent": USER_AGENT})
             
-            # Sjekk om feedparser faktisk fikk lastet ned (status kan mangle ved lokal fil, men viktig for nett)
             if hasattr(feed, "status") and feed.status >= 400:
                 logger.error(f"❌ HTTP feil mot {name}: {feed.status}")
                 continue
@@ -223,7 +213,6 @@ def check_stortinget():
     session = get_http_session()
     
     try:
-        # Henter sesjon med feilhåndtering
         res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=10)
         res.raise_for_status()
         sid = res.json()["innevaerende_sesjon"]["id"]
@@ -320,7 +309,7 @@ def send_weekly_report():
 
 if __name__ == "__main__":
     setup_database()
-    purge_old_data() # Vaktmester rydder opp først
+    purge_old_data()
     
     mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
     
