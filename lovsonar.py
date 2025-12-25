@@ -1,334 +1,209 @@
-#!/usr/bin/env python3
-"""
-LovSonar – Proff versjon (v3.1)
-Optimalisert basert på code review:
-- Safer PDF text extraction
-- Robust URL joining
-- Increased pagination limits
-"""
-
-import logging
 import sqlite3
-import requests
-import re
+import feedparser
+import logging
+import json
 import os
-import io
+import sys
 import smtplib
+import time
+import requests
 from datetime import datetime, timedelta
-from html import unescape
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
-from pypdf import PdfReader
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from email.mime.text import MIMEText
 from email.header import Header
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import re
 
-# =============================
-# KONFIGURASJON
-# =============================
+# Sjekker om pdf_leser.py ligger i mappen
+try:
+    import pdf_leser
+except ImportError:
+    pdf_leser = None
+    print("⚠️ ADVARSEL: Fant ikke pdf_leser.py. PDF-analyse vil ikke fungere.")
 
-DB_PATH = "lovsonar_seen.db"
+# ===========================================
+# 1. KONFIGURASJON & STRATEGISKE NØKKELORD
+# ===========================================
 
-KEYWORDS = [
-    "coop", "samvirke", "varehandel", "byggevare", "bygg",
-    "bærekraft", "miljø", "emballasje", "avfall",
-    "sirkulær", "gjenvinning", "eøs", "esg",
-    "csrd", "taksonomi", "aktsomhet", "arbeidsmiljø",
-    "plan- og bygningsloven", "avhendingslova", "håndverkertjenesteloven",
-    "teknisk forskrift", "tek17", "dok", "forbrukervern", "konkurransetilsynet"
+KW_SEGMENT = [
+    "byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", 
+    "discount", "billigkjede", "gds", "diy", "ombruk", "materialbank", 
+    "produktdatabase", "byggtjeneste", "varehandel", "samvirkelag", 
+    "coop", "obs bygg", "detaljhandel", "kjøpesenter"
 ]
 
-def get_session():
+KW_TOPIC = [
+    "bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", 
+    "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", 
+    "aktsomhet", "green claims", "grønnvasking", "reach", "clp", 
+    "pfas", "eudr", "epbd", "byggevareforordning", "cpr",
+    "emballasje", "plastløftet", "merking", "etikett", "dokumentasjon",
+    "digitalt produktpass", "dpp", "sporbarhet", "produktpass", "qr-kode",
+    "epd", "miljødeklarasjon", "farlige stoffer", "biocid", "voc", "løsemiddel",
+    "torv", "naturmangfold", "avskoging", "tropisk", "impregnert",
+    "overtredelsesgebyr", "tvangsmulkt", "klimaavgift", "høringsnotat", "høringsfrist"
+]
+
+KW_NOISE = ["skriv ut", "verktøylinje", "del paragraf", "meny", "til toppen", "personvern", "tilgjengelighet"]
+
+RSS_SOURCES = {
+    "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/dokument/eos-notater/rss/",
+    "📚 NOU (Utredning)": "https://www.regjeringen.no/no/dokument/nou-er/rss/",
+    "📢 Høring": "https://www.regjeringen.no/no/dokument/horinger/rss/",
+    "📜 Lovforslag/Prop": "https://www.regjeringen.no/no/dokument/proposisjoner/rss/"
+}
+
+DB_PATH = "lovsonar_seen.db"
+USER_AGENT = "LovSonar/2.3 (Internal Strategic Compliance Tool)"
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+# ===========================================
+# 2. NETTVERK & LOGIKK (Pkt 1: Lagt til 429)
+# ===========================================
+
+def get_http_session():
     session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    })
+    # Pkt 1: Lagt til 429 i status_forcelist
     retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retry)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
+    session.headers.update({"User-Agent": USER_AGENT})
     return session
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
-log = logging.getLogger("lovsonar")
+def clean_text(text):
+    if not text: return ""
+    from html import unescape
+    text = unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return " ".join(text.split()).strip()
 
-# =============================
-# DATABASE & HJELPEFUNKSJONER
-# =============================
-
-def get_db():
-    return sqlite3.connect(DB_PATH)
-
-def setup_db():
-    with get_db() as con:
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS seen (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                source TEXT,
-                url TEXT,
-                date_seen TEXT
-            )
-        """)
-
-def is_seen(id_):
-    with get_db() as con:
-        return con.execute("SELECT 1 FROM seen WHERE id = ?", (id_,)).fetchone() is not None
-
-def mark_seen(id_, title, source, url):
-    with get_db() as con:
-        try:
-            con.execute(
-                "INSERT OR IGNORE INTO seen VALUES (?, ?, ?, ?, ?)",
-                (id_, title, source, url, datetime.utcnow().isoformat())
-            )
-        except Exception as e:
-            log.error(f"Database error: {e}")
-
-def clean_text(txt):
-    if not txt: return ""
-    txt = unescape(txt)
-    txt = re.sub(r"\s+", " ", txt)
-    return txt.strip()
-
-def contains_keyword(text):
+def matches_composite_logic(text):
     if not text: return False
-    text_lower = text.lower()
-    for k in KEYWORDS:
-        # Ordgrenser for korte ord (<= 3 tegn) for å unngå støy
-        if len(k) <= 3:
-            pattern = r'\b' + re.escape(k) + r'\b'
-            if re.search(pattern, text_lower):
-                return True
-        elif k in text_lower:
-            return True
-    return False
+    t = text.lower()
+    noise_count = sum(1 for k in KW_NOISE if k in t)
+    if noise_count > 2: return False
+    has_segment = any(k in t for k in KW_SEGMENT)
+    has_topic = any(k in t for k in KW_TOPIC)
+    is_critical = any(k in t for k in ["høringsfrist", "forslag til endring", "høringsnotat"])
+    return (has_segment and has_topic) or is_critical
 
-# =============================
-# DYBDEANALYSE (PDF + ARTIKKEL)
-# =============================
+# ===========================================
+# 3. DATABASE
+# ===========================================
 
-def scan_pdf_content(pdf_url, session):
-    try:
-        log.info(f"   📄 Laster ned PDF: {pdf_url.split('/')[-1]}...")
-        r = session.get(pdf_url, timeout=20)
-        r.raise_for_status()
-        f = io.BytesIO(r.content)
-        reader = PdfReader(f)
-        
-        full_text = ""
-        # Leser inntil 15 sider
-        for i, page in enumerate(reader.pages):
-            if i >= 15: break
-            # Sikrere tekstuthenting (som foreslått i review)
-            text = page.extract_text()
-            full_text += (text or "").strip() + " "
-            
-        if contains_keyword(full_text):
-            log.info("   🎯 TREFF I PDF!")
-            return True
-    except Exception as e:
-        log.warning(f"   ⚠️ PDF-feil (hopper over): {e}")
-    return False
+def setup_database():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS seen_items (item_id TEXT PRIMARY KEY, source TEXT, title TEXT, date_seen TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS weekly_hits (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, title TEXT, description TEXT, link TEXT, pub_date TEXT, excerpt TEXT, detected_at TEXT)")
+        conn.commit()
 
-def deep_scan_article(url, session):
-    try:
-        r = session.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, "html.parser")
-        
-        # Fallback selektorer for innhold
-        main = soup.find(id="mainContent") or soup.find("main") or soup.find("div", class_="main-content") or soup
-        
-        if contains_keyword(main.get_text()):
-            log.info("   🎯 Treff i artikkeltekst!")
-            return True
+# ===========================================
+# 4. ANALYSE & INNSAMLING
+# ===========================================
 
-        pdf_links = main.select("a[href$='.pdf']")
-        for link in pdf_links:
-            href = link.get('href')
-            if href:
-                # Sikrere URL-sammenslåing
-                pdf_url = urljoin(url, href)
-                if scan_pdf_content(pdf_url, session):
-                    return True
-    except Exception as e:
-        log.warning(f"   ⚠️ Feil ved dybdesjekk: {e}")
-    return False
-
-# =============================
-# INNSAMLING
-# =============================
-
-def check_regjeringen():
-    urls = {
-        "Høringer": "https://www.regjeringen.no/no/dokument/hoyringar/id1763/",
-        "NOU": "https://www.regjeringen.no/no/dokument/nou-ar/id1767/",
-        "Proposisjoner": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/",
-        "EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/"
-    }
+def analyze_item(source_name, title, description, link, pub_date, item_id):
+    if not item_id: return
+    if pub_date < (datetime.utcnow() - timedelta(days=180)): return
     
-    session = get_session()
+    with sqlite3.connect(DB_PATH) as conn:
+        if conn.execute("SELECT 1 FROM seen_items WHERE item_id = ?", (str(item_id),)).fetchone():
+            return
 
-    for source, list_url in urls.items():
-        log.info(f"🌐 Sjekker Regjeringen: {source}...")
-        try:
-            r = session.get(list_url, timeout=20)
-            soup = BeautifulSoup(r.text, "html.parser")
-            main_content = soup.find(id="mainContent") or soup.find("ul", class_="result-list") or soup
-            links = main_content.select("h3 a, .teaser-content a, li.result-item h2 a, li a")
-            
-            count = 0
-            for a in links[:20]:
-                title = clean_text(a.get_text())
-                href = a.get("href", "")
-                
-                if len(title) < 5 or "javascript" in href: continue
-                # Sikrere URL
-                full_url = urljoin(list_url, href)
-                
-                # Sjekk også ingress/teaser hvis mulig
-                ingress = ""
-                parent = a.find_parent("li") or a.find_parent("div")
-                if parent:
-                    teaser = parent.select_one(".teaser-content, .intro, p")
-                    if teaser: ingress = clean_text(teaser.get_text())
+    full_text = f"{title} {description}"
+    excerpt = description[:300] + "..."
 
-                combined_text = f"{title} {ingress}"
-                
-                if is_seen(full_url): continue
+    should_check_pdf = pdf_leser and (link.lower().endswith(".pdf") or any(x in title.lower() for x in ["høring", "forskrift", "notat"]))
 
-                hit = False
-                hit_type = ""
+    if should_check_pdf:
+        tilleggs_tekst = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
+        if tilleggs_tekst and "FEIL" not in tilleggs_tekst:
+            full_text += " " + tilleggs_tekst
+            excerpt = f"[DOKUMENT-INFO]: {tilleggs_tekst[:600]}..."
+            time.sleep(0.5)
 
-                if contains_keyword(combined_text):
-                    hit = True
-                    hit_type = "Tittel/Ingress"
-                else:
-                    if deep_scan_article(full_url, session):
-                        hit = True
-                        hit_type = "Innhold/PDF"
+    if matches_composite_logic(full_text):
+        if "høring" in title.lower(): title = "📢 [HØRING] " + title
+        if "proposisjon" in title.lower(): title = "📜 [PROP] " + title
 
-                if hit:
-                    log.info(f"✅ TREFF ({hit_type}): {title}")
-                    mark_seen(full_url, title, f"Regjeringen ({source})", full_url)
-                    count += 1
-                else:
-                    mark_seen(full_url, title, "Ignorert", full_url)
-            
-            if count > 0: log.info(f"   Lagret {count} nye saker.")
-
-        except Exception as e:
-            log.error(f"❌ Feil mot {source}: {e}")
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)", (str(item_id), source_name, title, datetime.utcnow().isoformat()))
+            conn.execute("INSERT INTO weekly_hits (source, title, description, link, pub_date, excerpt, detected_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (source_name, title, description, link, pub_date.isoformat(), excerpt, datetime.utcnow().isoformat()))
+            conn.commit()
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)", (str(item_id), source_name, title, datetime.utcnow().isoformat()))
+            conn.commit()
 
 def check_stortinget():
-    log.info("🏛️ Sjekker Stortinget API...")
-    session = get_session()
-    
+    logger.info("🏛️ Poller Stortinget...")
+    session = get_http_session()
     try:
-        ses_resp = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=10)
-        sid = ses_resp.json()["innevaerende_sesjon"]["id"]
-        
-        page = 1
-        total_count = 0
-        max_pages = 20 # Økt grense for sikkerhets skyld
-        
-        while page <= max_pages:
-            api_url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&page={page}&pagesize=500&format=json"
-            r = session.get(api_url, timeout=15)
-            data = r.json()
-            saker = data.get("saker_liste", [])
-            
-            if not saker: break 
-
-            for sak in saker:
-                title = clean_text(sak.get("tittel", ""))
-                short_title = clean_text(sak.get("korttittel", ""))
-                combined_text = f"{title} {short_title}"
-                item_id = f"stortinget-{sak['id']}"
-                
-                if is_seen(item_id): continue 
-                
-                if contains_keyword(combined_text):
-                    url = f"https://www.stortinget.no/no/Saker-og-publikasjoner/Saker/Sak/?p={sak['id']}"
-                    log.info(f"✅ TREFF STORTINGET: {title}")
-                    mark_seen(item_id, title, "Stortinget", url)
-                    total_count += 1
-                else:
-                    mark_seen(item_id, title, "Ignorert", "")
-            
-            if len(saker) < 500: break
-            page += 1
-
-        if total_count > 0: log.info(f"   Fant {total_count} saker.")
-        
+        res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=15)
+        sid = res.json()["innevaerende_sesjon"]["id"]
+        # Pkt 3: Henter de siste 100 sakene for å sikre dekning uten pagineringskompleksitet
+        data = session.get(f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=100&format=json", timeout=15).json()
+        for sak in data.get("saker_liste", []):
+            dg = str(sak.get("dokumentgruppe") or "").lower()
+            if any(x in dg for x in ["spørsmål", "interpellasjon", "referat", "skriftlig"]): continue
+            analyze_item(source_name="🏛️ Stortinget", title=sak.get("tittel", ""), description=f"Type: {dg}. Tema: {sak.get('tema','')}", link=f"https://stortinget.no/sak/{sak['id']}", pub_date=datetime.utcnow(), item_id=f"ST-{sak['id']}")
     except Exception as e:
-        log.error(f"❌ Feil mot Stortinget: {e}")
+        logger.error(f"Feil mot Stortinget: {e}")
 
-# =============================
-# RAPPORT
-# =============================
+def check_rss_feeds():
+    for name, url in RSS_SOURCES.items():
+        try:
+            feed = feedparser.parse(url, request_headers={"User-Agent": USER_AGENT})
+            for entry in feed.entries:
+                analyze_item(source_name=name, title=clean_text(entry.get("title", "")), description=clean_text(entry.get("description", "")), link=entry.get("link", ""), pub_date=datetime(*entry.published_parsed[:6]) if hasattr(entry, "published_parsed") else datetime.utcnow(), item_id=entry.get("guid") or entry.get("link"))
+        except Exception as e:
+            logger.error(f"Feil ved RSS {name}: {e}")
+
+# ===========================================
+# 5. RAPPORTERING (Pkt 2: E-post rettelser)
+# ===========================================
 
 def send_weekly_report():
-    log.info("📧 Lager ukesrapport...")
     cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    
-    with get_db() as con:
-        rows = con.execute("""
-            SELECT title, source, url, date_seen 
-            FROM seen 
-            WHERE date_seen >= ? 
-            AND source NOT LIKE 'Ignorert%'
-            ORDER BY date_seen DESC
-        """, (cutoff,)).fetchall()
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT source, title, link, excerpt, pub_date FROM weekly_hits WHERE detected_at >= ? ORDER BY pub_date DESC", (cutoff,)).fetchall()
 
-    if not rows:
-        log.info("Ingen nye relevante saker denne uken.")
-        return
+    if not rows: return
 
-    msg_lines = [f"Hei! LovSonar-rapport uke {datetime.now().isocalendar()[1]}."]
-    msg_lines.append(f"Fant {len(rows)} saker (Deep Scan):\n")
-    
+    md_text = [f"# 🛡️ LovSonar: {len(rows)} Relevante treff", "Fokus: Bærekraft, Emballasje & Byggevarehandel\n"]
     for r in rows:
-        title, source, url, date = r
-        try: d_str = datetime.fromisoformat(date).strftime('%d.%m')
-        except: d_str = "?"
-        msg_lines.append(f"🔹 {title}")
-        msg_lines.append(f"   Kilde: {source} ({d_str})")
-        msg_lines.append(f"   Lenke: {url}\n")
-    
-    msg_lines.append("\n---\nMvh LovSonar Bot 🤖")
-    body = "\n".join(msg_lines)
+        source, title, link, excerpt, pdate = r
+        md_text.append(f"## {title}\n**Kilde:** {source} | **Dato:** {pdate[:10]} | [Åpne sak]({link})\n> {excerpt[:800]}\n---")
 
-    email_user = os.environ.get("EMAIL_USER")
-    email_pass = os.environ.get("EMAIL_PASS")
-    email_to = os.environ.get("EMAIL_RECIPIENT", email_user)
+    md_text.append("\n### 🤖 AI-ANALYSE KONTEKST\n" + os.environ.get("COMPANY_CONTEXT", "Profil: Obs BYGG / Coop."))
+    md_text.append("\n**OPPGAVE:** Vurder strategisk påvirkning for varehandel.")
+
+    email_user = os.environ.get("EMAIL_USER", "").strip()
+    email_pass = os.environ.get("EMAIL_PASS", "").strip()
+    email_to = os.environ.get("EMAIL_RECIPIENT", email_user).strip()
 
     if email_user and email_pass:
+        msg = MIMEText("\n".join(md_text), "plain", "utf-8")
+        msg["Subject"] = Header(f"LovSonar: {len(rows)} strategiske treff", "utf-8")
+        msg["From"] = email_user
+        msg["To"] = email_to
         try:
-            msg = MIMEText(body, "plain", "utf-8")
-            msg["Subject"] = Header(f"LovSonar: {len(rows)} saker", "utf-8")
-            msg["From"] = email_user
-            msg["To"] = email_to
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as server:
                 server.login(email_user, email_pass)
-                server.send_message(msg)
-            log.info("✅ E-post sendt!")
+                # Pkt 2: Spesifiserer from_addr og to_addrs eksplisitt
+                server.send_message(msg, from_addr=email_user, to_addrs=[email_to])
+            logger.info("📧 Ukesrapport sendt.")
         except Exception as e:
-            log.error(f"❌ E-post feilet: {e}")
-    else:
-        print(body)
-
-def main():
-    setup_db()
-    mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
-    
-    if mode == "weekly":
-        send_weekly_report()
-    else:
-        check_regjeringen()
-        check_stortinget()
-        log.info("🏁 Ferdig.")
+            logger.error(f"Feil ved sending: {e}")
 
 if __name__ == "__main__":
-    main()
+    setup_database()
+    mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
+    if mode == "weekly": send_weekly_report()
+    else:
+        check_rss_feeds()
+        check_stortinget()
+
+                
