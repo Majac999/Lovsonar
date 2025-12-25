@@ -26,7 +26,6 @@ except ImportError:
 # 1. KONFIGURASJON
 # ===========================================
 
-# Nøkkelord for BRANSJE (Må ha minst én av disse)
 KW_SEGMENT = [
     "byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", 
     "discount", "billigkjede", "gjør-det-selv", "gds", "diy", 
@@ -34,7 +33,6 @@ KW_SEGMENT = [
     "varehandel", "konkurransetilsynet", "samvirkelag", "coop"
 ]
 
-# Nøkkelord for TEMA (Må OGSÅ ha minst én av disse)
 KW_TOPIC = [
     "bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", 
     "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", 
@@ -44,18 +42,24 @@ KW_TOPIC = [
     "arbeidsmiljøloven", "avhendingslova", "plan- og bygningsloven"
 ]
 
-# KILDER: Vi bruker FASTE ID-er fra Regjeringen (de er stabile)
+# KILDER
+# Vi bruker faste ID-er som hovedregel.
 RSS_SOURCES = {
-    "📢 Regjeringen (Høringer)": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
-    "📚 Regjeringen (NOU)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
-    "📜 Regjeringen (Prop/Meld)": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
-    "🇪🇺 Regjeringen (EØS)": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
+    "📢 Høringer": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
+    "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
+    "📜 Prop/Meld": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
+    "🇪🇺 EØS": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
 }
 
 DB_PATH = "lovsonar_seen.db"
 
-# "Forkledning" som nettleser for å unngå 404/blokkering
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+# HER ER ENDRINGEN: Vi later som vi er en helt vanlig Chrome-nettleser
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "no-NO,no;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://www.regjeringen.no/"
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -70,7 +74,8 @@ def get_http_session():
     adapter = HTTPAdapter(max_retries=retry)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    session.headers.update({"User-Agent": USER_AGENT})
+    # Oppdaterer med alle de nye headersene
+    session.headers.update(HEADERS)
     return session
 
 def clean_text(text):
@@ -191,18 +196,19 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
 # ===========================================
 
 def check_rss_feeds():
+    session = get_http_session()
+    
     for name, url in RSS_SOURCES.items():
         logger.info(f"📡 Sjekker {name}...")
         try:
-            # Bruker session for å få med "User-Agent" forkledningen
-            session = get_http_session()
-            response = session.get(url, timeout=10)
+            # Last ned innholdet med requests først for å bruke våre Headers
+            response = session.get(url, timeout=15)
             
             if response.status_code == 404:
-                logger.warning(f"⚠️ Kilde ikke funnet (404): {name}. Hopper over.")
+                logger.warning(f"⚠️ Kilde ikke funnet (404): {name}. Blokkert av server eller feil URL.")
                 continue
             
-            # Mater innholdet direkte til feedparser
+            # Gi innholdet til feedparser
             feed = feedparser.parse(response.content)
             
             if not feed.entries:
@@ -243,7 +249,6 @@ def check_stortinget():
 
         for sak in data.get("saker_liste", []):
             dg = str(sak.get("dokumentgruppe") or "").lower()
-            # Hopper over spørretimen etc.
             if any(x in dg for x in ["spørsmål", "interpellasjon", "referat", "skriftlig"]): 
                 continue
                 
@@ -314,4 +319,31 @@ def send_weekly_report():
         msg["To"] = email_to
 
         try:
-            with smtplib.SMTP
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as server:
+                server.login(email_user, email_pass)
+                server.send_message(msg)
+            logger.info("📧 Rapport sendt!")
+        except Exception as e:
+            logger.error(f"Feil ved sending: {e}")
+    else:
+        logger.warning("Mangler e-post oppsett. Printer rapport til logg.")
+        print(full_msg)
+
+# ===========================================
+# MAIN
+# ===========================================
+
+if __name__ == "__main__":
+    setup_database()
+    purge_old_data()
+    
+    mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
+    
+    if mode == "weekly":
+        logger.info("Kjører ukesrapport...")
+        send_weekly_report()
+    else:
+        logger.info("Kjører daglig innsamling...")
+        # VIKTIG: Vi sjekker Stortinget først, siden den er mest robust
+        check_stortinget()
+        check_rss_feeds()
