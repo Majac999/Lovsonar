@@ -3,17 +3,17 @@ name: LovSonar Overvåkning
 on:
   schedule:
     - cron: '0 */6 * * *'  # Kjører hver 6. time (kl 00, 06, 12, 18)
-  workflow_dispatch:      # Lar deg kjøre den manuelt via en knapp (fint for testing)
+  workflow_dispatch:      # Lar deg starte den manuelt med en knapp
 
 jobs:
   kjor_sonar:
     runs-on: ubuntu-latest
     
     permissions:
-      contents: write  # VIKTIG: Gir roboten lov til å lagre databasen tilbake i GitHub
+      contents: write  # VIKTIG: Lar boten lagre historikk-databasen
 
     steps:
-      - name: Hent koden (Checkout)
+      - name: Hent koden
         uses: actions/checkout@v4
 
       - name: Sett opp Python
@@ -23,23 +23,20 @@ jobs:
 
       - name: Installer biblioteker
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Kjør LovSonar
         env:
-          # Kobler GitHub Secrets til Python-koden din
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
           LOVSONAR_MODE: daily
         run: python lovsonar.py
 
-      - name: Lagre database-historikk
+      - name: Lagre database
         run: |
           git config --global user.name "LovSonar Bot"
           git config --global user.email "bot@lovsonar.no"
-          # Vi legger til databasen
           git add lovsonar_seen.db
-          # Sjekker om det faktisk er endringer før vi committer (hindrer feilmeldinger)
+          # Sjekker om det er endringer før lagring for å unngå feilmelding
           git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database [skip ci]" && git push)
