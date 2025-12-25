@@ -41,7 +41,7 @@ KW_TOPIC = [
     "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp"
 ]
 
-# HER ER DE NYE, KORREKTE LENKENE:
+# HER ER DE NYE, KORREKTE LENKENE (Oppdatert):
 RSS_SOURCES = {
     "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss",
     "📚 NOU (Utredning)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
@@ -161,12 +161,14 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
 
     if should_check_pdf:
         logger.info(f"   🔎 Sjekker PDF innhold: {title[:30]}...")
-        tilleggs_tekst = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
-        
-        if tilleggs_tekst and "FEIL" not in tilleggs_tekst:
-            full_text += " " + tilleggs_tekst
-            excerpt = f"[PDF]: {tilleggs_tekst[:600]}..."
-            time.sleep(1)
+        try:
+            tilleggs_tekst = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
+            if tilleggs_tekst and "FEIL" not in tilleggs_tekst:
+                full_text += " " + tilleggs_tekst
+                excerpt = f"[PDF]: {tilleggs_tekst[:600]}..."
+                time.sleep(1) # Høflig pause mot server
+        except Exception as e:
+            logger.warning(f"Kunne ikke lese PDF: {e}")
 
     if matches_composite_logic(full_text):
         logger.info(f"✅ TREFF! {title}")
@@ -174,6 +176,7 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
         if "proposisjon" in title.lower(): title = "📜 [PROP] " + title
         register_hit(item_id, source_name, title, description, link, pub_date, excerpt)
     else:
+        # Marker som sett (støy) så vi ikke sjekker den igjen
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)", 
                          (str(item_id), source_name, title, datetime.utcnow().isoformat()))
