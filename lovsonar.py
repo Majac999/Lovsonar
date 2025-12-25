@@ -1,5 +1,4 @@
 import sqlite3
-import feedparser
 import logging
 import json
 import os
@@ -14,7 +13,7 @@ from html import unescape
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import re
-from bs4 import BeautifulSoup # Vi bruker denne for å lese nettsider direkte
+from bs4 import BeautifulSoup # Brukes for å lese nettsider som et menneske
 
 # Sjekker om pdf_leser.py ligger i mappen
 try:
@@ -45,7 +44,7 @@ KW_TOPIC = [
 
 DB_PATH = "lovsonar_seen.db"
 
-# Vi bruker vanlige Headers for å se ut som en nettleser
+# Vi later som vi er en vanlig Chrome-nettleser
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -68,23 +67,12 @@ def get_http_session():
     session.headers.update(HEADERS)
     return session
 
-def clean_text(text):
-    if not text: return ""
-    text = unescape(text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return " ".join(text.split()).strip()
-
 def matches_composite_logic(text):
     if not text: return False
     text_lower = text.lower()
     has_segment = any(k in text_lower for k in KW_SEGMENT)
     has_topic = any(k in text_lower for k in KW_TOPIC)
     return has_segment and has_topic
-
-def get_publish_date(entry):
-    if hasattr(entry, "published_parsed") and entry.published_parsed:
-        return datetime(*entry.published_parsed[:6])
-    return datetime.utcnow()
 
 def is_old(date_obj, days=90):
     limit = datetime.utcnow() - timedelta(days=days)
@@ -140,7 +128,7 @@ def register_hit(item_id, source, title, desc, link, pub_date, excerpt):
         conn.commit()
 
 # ===========================================
-# 4. ANALYSE (Med PDF-filter)
+# 4. ANALYSE
 # ===========================================
 
 def analyze_item(source_name, title, description, link, pub_date, item_id):
@@ -165,7 +153,7 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
             if tilleggs_tekst and "FEIL" not in tilleggs_tekst:
                 full_text += " " + tilleggs_tekst
                 excerpt = f"[PDF]: {tilleggs_tekst[:600]}..."
-                time.sleep(1) # Høflig pause mot server
+                time.sleep(1) # Pause for å være høflig
         except Exception as e:
             logger.warning(f"Kunne ikke lese PDF: {e}")
 
@@ -182,17 +170,17 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
             conn.commit()
 
 # ===========================================
-# 5. INNSAMLING
+# 5. INNSAMLING (Stortinget + Web Scraping)
 # ===========================================
 
-def check_regjeringen_html():
+def check_regjeringen_nettside():
     """
-    Siden RSS gir 404, leser vi HTML-siden direkte.
-    Dette omgår blokkeringen.
+    Henter høringer direkte fra nettsiden (HTML) i stedet for RSS.
+    Dette omgår 404-feilene.
     """
     url = "https://www.regjeringen.no/no/aktuelt/horinger/id1763/"
-    name = "📢 Regjeringen (Nettside)"
-    logger.info(f"🌐 Sjekker {name} via HTML-skraping...")
+    source_name = "📢 Regjeringen (Web)"
+    logger.info(f"🌐 Sjekker {source_name}...")
     
     session = get_http_session()
     try:
@@ -201,40 +189,45 @@ def check_regjeringen_html():
         
         soup = BeautifulSoup(res.content, "html.parser")
         
-        # Finn alle lenker som ser ut som høringer (inneholder "Høring" i tittelen)
-        # Dette er litt "grovere" enn RSS, men det virker.
-        links = soup.find_all("a", href=True)
+        # Finn alle lenker inne i hovedinnholdet
+        # Regjeringen bruker ofte klasser som 'teaser' eller lister
+        main_content = soup.find(id="mainContent") or soup
+        links = main_content.find_all("a", href=True)
         
         count = 0
         for link in links:
             tittel = link.get_text().strip()
-            url_part = link['href']
+            href = link['href']
             
-            # Filtrer bort støy
-            if len(tittel) < 10 or "høring" not in tittel.lower():
+            # Enkel sjekk for å se om dette er en relevant lenke
+            if len(tittel) < 5 or "javascript" in href:
                 continue
-            
-            # Lag full URL
-            if url_part.startswith("/"):
-                full_url = "https://www.regjeringen.no" + url_part
-            else:
-                full_url = url_part
 
-            item_id = full_url # Bruker URL som ID
+            # Lag full URL
+            if href.startswith("/"):
+                full_url = "https://www.regjeringen.no" + href
+            else:
+                full_url = href
             
-            # Vi analyserer
+            # Sjekk at lenken peker til et dokument/sak
+            if "/id" not in full_url and "/dokumenter/" not in full_url:
+                continue
+
+            # Bruker URL som unik ID
+            item_id = full_url
+            
             analyze_item(
-                source_name=name,
+                source_name=source_name,
                 title=tittel,
-                description="Hentet fra nettsiden. Sjekk lenken for detaljer.",
+                description="Hentet fra Regjeringen.no",
                 link=full_url,
                 pub_date=datetime.utcnow(),
                 item_id=item_id
             )
             count += 1
             
-        logger.info(f"   Fant {count} mulige saker på nettsiden.")
-            
+        logger.info(f"   Fant {count} lenker på høringssiden.")
+
     except Exception as e:
         logger.error(f"❌ Feil ved lesing av nettside: {e}")
 
@@ -243,12 +236,10 @@ def check_stortinget():
     session = get_http_session()
     
     try:
-        # Henter sesjonID automatisk
         res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=10)
         res.raise_for_status()
         sid = res.json()["innevaerende_sesjon"]["id"]
         
-        # Henter saker for denne sesjonen
         res_saker = session.get(f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&format=json", timeout=10)
         res_saker.raise_for_status()
         data = res_saker.json()
@@ -352,5 +343,5 @@ if __name__ == "__main__":
         send_weekly_report()
     else:
         logger.info("Kjører daglig innsamling...")
-        check_stortinget()       # Dette virker allerede!
-        check_regjeringen_html() # Ny metode som leser nettsiden direkte
+        check_stortinget()       # Fungerer perfekt!
+        check_regjeringen_nettside() # Ny metode som omgår RSS-feil
