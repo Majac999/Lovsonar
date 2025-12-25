@@ -1,3 +1,22 @@
+Dette er klassisk prøving og feiling med offentlige data! 😅
+
+Loggen viser at de "smarte" søke-lenkene jeg ga deg også feilet (Regjeringen blokkerer dem sannsynligvis når de kommer fra en server).
+
+**Løsningen er å gå tilbake til det som virket:**
+
+1. Vi bruker de **faste ID-lenkene** til Regjeringen (Høringer, NOU, Prop).
+2. Vi går tilbake til å bruke **Stortinget sitt API** (kodesnutten som sjekker JSON) i stedet for RSS, for API-et er mye mer stabilt.
+
+Her er den endelige koden som kombinerer det beste fra begge verdener. Denne:
+
+* Bruker ID-lenker (som vi vet finnes).
+* Aktiverer `check_stortinget()` igjen (som sjekker Stortinget direkte).
+
+### Oppdatert fil: `lovsonar.py`
+
+*(Kopier alt og erstatt innholdet på GitHub)*
+
+```python
 import sqlite3
 import feedparser
 import logging
@@ -41,12 +60,12 @@ KW_TOPIC = [
     "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp"
 ]
 
-# === HER ER DEN NYE, ROBUSTE KILDELISTEN ===
-# Vi bruker Stortinget for NOU/Prop/Meld fordi Regjeringen sine lenker er ustabile.
+# VI GÅR TILBAKE TIL FASTE ID-ER (DISSE VIRKER BEST)
 RSS_SOURCES = {
-    "🏛️ Stortinget (Lover/NOU/Meld)": "https://data.stortinget.no/feed/publikasjoner",
-    "📢 Regjeringen (Høringer)": "https://www.regjeringen.no/no/sok/rss?type=horing",
-    "🇪🇺 Regjeringen (EØS)": "https://www.regjeringen.no/no/sok/rss?type=eos-notat"
+    "📢 Høringer": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
+    "📚 NOU (Utredninger)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
+    "📜 Lovforslag/Prop": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
+    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
 }
 
 DB_PATH = "lovsonar_seen.db"
@@ -189,7 +208,6 @@ def check_rss_feeds():
     for name, url in RSS_SOURCES.items():
         logger.info(f"📡 Sjekker {name}...")
         try:
-            # Vi legger til en sjekk på HTTP statuskode
             response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=10)
             
             if response.status_code == 404:
@@ -198,10 +216,6 @@ def check_rss_feeds():
                 
             feed = feedparser.parse(response.content)
             
-            if hasattr(feed, "bozo") and feed.bozo == 1:
-                # Advarsel, men vi prøver likevel å lese innholdet
-                logger.debug(f"⚠️ Feedparser warning for {name}: {feed.bozo_exception}")
-
             if not feed.entries:
                 logger.info(f"   Ingen nye saker i feeden: {name}")
 
@@ -219,6 +233,45 @@ def check_rss_feeds():
                 )
         except Exception as e:
             logger.error(f"❌ Feil ved lesing av RSS {name}: {e}")
+
+def check_stortinget():
+    logger.info("🏛️ Sjekker Stortinget (API)...")
+    session = get_http_session()
+    
+    try:
+        # Henter sesjonID automatisk
+        res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=10)
+        res.raise_for_status()
+        sid = res.json()["innevaerende_sesjon"]["id"]
+        
+        # Henter saker for denne sesjonen
+        res_saker = session.get(f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&format=json", timeout=10)
+        res_saker.raise_for_status()
+        data = res_saker.json()
+        
+        logger.info(f"   Fant {len(data.get('saker_liste', []))} saker på Stortinget. Analyserer...")
+
+        for sak in data.get("saker_liste", []):
+            dg = str(sak.get("dokumentgruppe") or "").lower()
+            # Hopper over spørretimen etc.
+            if any(x in dg for x in ["spørsmål", "interpellasjon", "referat", "skriftlig"]): 
+                continue
+                
+            item_id = f"STORTINGET-{sak['id']}"
+            tittel = sak.get("tittel", "")
+            tema = sak.get("tema", "") or ""
+            
+            analyze_item(
+                source_name="🏛️ Stortingssak",
+                title=tittel,
+                description=f"Type: {dg}. Tema: {tema}.",
+                link=f"https://stortinget.no/sak/{sak['id']}",
+                pub_date=datetime.utcnow(), # APIet har ikke dato lett tilgjengelig, bruker nåtid
+                item_id=item_id
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Feil mot Stortinget API: {e}")
 
 # ===========================================
 # 6. RAPPORTERING
@@ -297,4 +350,7 @@ if __name__ == "__main__":
     else:
         logger.info("Kjører daglig innsamling...")
         check_rss_feeds()
-        # check_stortinget() kjøres ikke separat lenger siden vi bruker RSS derfra nå
+        # Nå kjører vi Stortinget API igjen, siden RSS derfra var ustabilt
+        check_stortinget()
+
+```
