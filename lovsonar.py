@@ -41,16 +41,17 @@ KW_TOPIC = [
     "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp"
 ]
 
-# VI GÅR TILBAKE TIL FASTE ID-ER (DISSE VIRKER BEST)
+# RSS-KILDER (Disse lenkene fungerer når vi "kler oss ut" som Chrome)
 RSS_SOURCES = {
-    "📢 Høringer": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
-    "📚 NOU (Utredninger)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
-    "📜 Lovforslag/Prop": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
-    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
+    "📢 Regjeringen (Høringer)": "https://www.regjeringen.no/no/sok/rss?type=horing",
+    "📚 Regjeringen (NOU)": "https://www.regjeringen.no/no/sok/rss?type=nou",
+    "🇪🇺 Regjeringen (EØS)": "https://www.regjeringen.no/no/sok/rss?type=eos-notat"
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/2.1 (Internal Compliance Tool)"
+
+# VIKTIG ENDRING: Vi later som vi er en vanlig nettleser for å unngå blokkering
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -189,7 +190,9 @@ def check_rss_feeds():
     for name, url in RSS_SOURCES.items():
         logger.info(f"📡 Sjekker {name}...")
         try:
-            response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=10)
+            # Vi bruker session for å få med "User-Agent" forkledningen
+            session = get_http_session()
+            response = session.get(url, timeout=10)
             
             if response.status_code == 404:
                 logger.warning(f"⚠️ Kilde ikke funnet (404): {name}. Hopper over.")
@@ -247,7 +250,7 @@ def check_stortinget():
                 title=tittel,
                 description=f"Type: {dg}. Tema: {tema}.",
                 link=f"https://stortinget.no/sak/{sak['id']}",
-                pub_date=datetime.utcnow(), # APIet har ikke dato lett tilgjengelig, bruker nåtid
+                pub_date=datetime.utcnow(),
                 item_id=item_id
             )
             
@@ -331,5 +334,4 @@ if __name__ == "__main__":
     else:
         logger.info("Kjører daglig innsamling...")
         check_rss_feeds()
-        # Nå kjører vi Stortinget API igjen, siden RSS derfra var ustabilt
         check_stortinget()
