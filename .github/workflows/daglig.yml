@@ -21,7 +21,7 @@ jobs:
           python-version: '3.10'
 
       - name: Installer avhengigheter
-        # ENDRING: La til 'pypdf' her for PDF-leseren
+        # HER ER ENDRINGEN: Vi har lagt til 'pypdf'
         run: pip install requests feedparser pypdf
 
       - name: Kjør Lovsonar (Daglig modus)
