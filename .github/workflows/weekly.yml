@@ -1,0 +1,31 @@
+name: Ukentlig Rapport (Mandag)
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'  # Kjører hver mandag kl 08:00 (norsk tid ca)
+  workflow_dispatch:      # Lar deg teste e-posten manuelt NÅ
+
+jobs:
+  send_rapport:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Hent koden og databasen
+        uses: actions/checkout@v4
+
+      - name: Sett opp Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Installer biblioteker
+        run: |
+          pip install requests feedparser beautifulsoup4 pypdf urllib3
+
+      - name: Send ukesrapport
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          LOVSONAR_MODE: weekly  # VIKTIG: Dette trigger e-posten
+        run: python lovsonar.py
