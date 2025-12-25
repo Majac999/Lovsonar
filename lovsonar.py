@@ -1,22 +1,3 @@
-Dette er klassisk prøving og feiling med offentlige data! 😅
-
-Loggen viser at de "smarte" søke-lenkene jeg ga deg også feilet (Regjeringen blokkerer dem sannsynligvis når de kommer fra en server).
-
-**Løsningen er å gå tilbake til det som virket:**
-
-1. Vi bruker de **faste ID-lenkene** til Regjeringen (Høringer, NOU, Prop).
-2. Vi går tilbake til å bruke **Stortinget sitt API** (kodesnutten som sjekker JSON) i stedet for RSS, for API-et er mye mer stabilt.
-
-Her er den endelige koden som kombinerer det beste fra begge verdener. Denne:
-
-* Bruker ID-lenker (som vi vet finnes).
-* Aktiverer `check_stortinget()` igjen (som sjekker Stortinget direkte).
-
-### Oppdatert fil: `lovsonar.py`
-
-*(Kopier alt og erstatt innholdet på GitHub)*
-
-```python
 import sqlite3
 import feedparser
 import logging
@@ -352,5 +333,3 @@ if __name__ == "__main__":
         check_rss_feeds()
         # Nå kjører vi Stortinget API igjen, siden RSS derfra var ustabilt
         check_stortinget()
-
-```
