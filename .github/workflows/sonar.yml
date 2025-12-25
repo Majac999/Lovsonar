@@ -1,1 +1,41 @@
+name: LovSonar Overvåkning
 
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Kjører hver 6. time
+  workflow_dispatch:      # Lar deg starte den manuelt
+
+jobs:
+  kjor_sonar:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write  # VIKTIG: Lar boten lagre databasen
+
+    steps:
+      - name: Hent koden
+        uses: actions/checkout@v4
+
+      - name: Sett opp Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Installer biblioteker
+        run: |
+          pip install requests feedparser beautifulsoup4 pypdf urllib3
+
+      - name: Kjør LovSonar
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          LOVSONAR_MODE: daily
+        run: python lovsonar.py
+
+      - name: Lagre database
+        run: |
+          git config --global user.name "LovSonar Bot"
+          git config --global user.email "bot@lovsonar.no"
+          git add lovsonar_seen.db
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database [skip ci]" && git push)
