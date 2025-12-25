@@ -38,4 +38,5 @@ jobs:
           git config --global user.name "LovSonar Bot"
           git config --global user.email "bot@lovsonar.no"
           git add lovsonar_seen.db
+          # Sjekker om det er endringer før lagring for å unngå feilmelding
           git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database [skip ci]" && git push)
