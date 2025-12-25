@@ -41,12 +41,12 @@ KW_TOPIC = [
     "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp"
 ]
 
-# HER ER DE NYE, KORREKTE LENKENE (Oppdatert):
+# HER ER DE RIKTIGE LENKENE (Oppdatert og testet):
 RSS_SOURCES = {
-    "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss",
-    "📚 NOU (Utredning)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
-    "📢 Høring": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
-    "📜 Lovforslag/Prop": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss"
+    "📢 Høringer": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
+    "📚 NOU (Utredninger)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
+    "📜 Lovforslag & Meldinger": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
+    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
 }
 
 DB_PATH = "lovsonar_seen.db"
@@ -60,7 +60,6 @@ logger = logging.getLogger(__name__)
 # ===========================================
 
 def get_http_session():
-    """Lager en robust sesjon med retry og timeout."""
     session = requests.Session()
     retry = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retry)
