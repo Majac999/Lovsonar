@@ -1,5 +1,4 @@
-
-    import sqlite3
+import sqlite3
 import feedparser
 import logging
 import json
