@@ -41,17 +41,16 @@ KW_TOPIC = [
     "plastløftet", "emballasje", "klimaavgift", "digitale produktpass", "dpp"
 ]
 
-# RSS-KILDER (Disse lenkene fungerer når vi "kler oss ut" som Chrome)
+# RSS-LENKER (Ferdig oppsatt med Høringer, NOU, Prop og Meldinger)
 RSS_SOURCES = {
-    "📢 Regjeringen (Høringer)": "https://www.regjeringen.no/no/sok/rss?type=horing",
-    "📚 Regjeringen (NOU)": "https://www.regjeringen.no/no/sok/rss?type=nou",
-    "🇪🇺 Regjeringen (EØS)": "https://www.regjeringen.no/no/sok/rss?type=eos-notat"
+    "📢 Høringer": "https://www.regjeringen.no/no/aktuelt/horinger/id1763/rss",
+    "📚 NOU (Utredninger)": "https://www.regjeringen.no/no/dokument/nou-er/id1767/rss",
+    "📜 Lovforslag & Meldinger": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/rss",
+    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/rss"
 }
 
 DB_PATH = "lovsonar_seen.db"
-
-# VIKTIG ENDRING: Vi later som vi er en vanlig nettleser for å unngå blokkering
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+USER_AGENT = "LovSonar/2.1 (Internal Compliance Tool)"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -190,18 +189,11 @@ def check_rss_feeds():
     for name, url in RSS_SOURCES.items():
         logger.info(f"📡 Sjekker {name}...")
         try:
-            # Vi bruker session for å få med "User-Agent" forkledningen
-            session = get_http_session()
-            response = session.get(url, timeout=10)
+            feed = feedparser.parse(url, request_headers={"User-Agent": USER_AGENT})
             
-            if response.status_code == 404:
-                logger.warning(f"⚠️ Kilde ikke funnet (404): {name}. Hopper over.")
+            if hasattr(feed, "status") and feed.status >= 400:
+                logger.error(f"❌ HTTP feil mot {name}: {feed.status}")
                 continue
-                
-            feed = feedparser.parse(response.content)
-            
-            if not feed.entries:
-                logger.info(f"   Ingen nye saker i feeden: {name}")
 
             for entry in feed.entries:
                 item_id = entry.get("guid") or entry.get("link")
@@ -219,25 +211,20 @@ def check_rss_feeds():
             logger.error(f"❌ Feil ved lesing av RSS {name}: {e}")
 
 def check_stortinget():
-    logger.info("🏛️ Sjekker Stortinget (API)...")
+    logger.info("🏛️ Sjekker Stortinget...")
     session = get_http_session()
     
     try:
-        # Henter sesjonID automatisk
         res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=10)
         res.raise_for_status()
         sid = res.json()["innevaerende_sesjon"]["id"]
         
-        # Henter saker for denne sesjonen
         res_saker = session.get(f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&format=json", timeout=10)
         res_saker.raise_for_status()
         data = res_saker.json()
         
-        logger.info(f"   Fant {len(data.get('saker_liste', []))} saker på Stortinget. Analyserer...")
-
         for sak in data.get("saker_liste", []):
             dg = str(sak.get("dokumentgruppe") or "").lower()
-            # Hopper over spørretimen etc.
             if any(x in dg for x in ["spørsmål", "interpellasjon", "referat", "skriftlig"]): 
                 continue
                 
