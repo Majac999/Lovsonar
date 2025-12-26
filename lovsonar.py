@@ -24,7 +24,7 @@ KW_SEGMENT = [
     "byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", "discount",
     "billigkjede", "gds", "diy", "ombruk", "materialbank", "produktdatabase",
     "byggtjeneste", "varehandel", "samvirkelag", "coop", "obs bygg",
-    "byggforretning", "bygg og anlegg", "detaljhandel", "faghandel", 
+    "byggforretning", "bygg og anlegg", "detaljhandel", "faghandel",
     "nettbutikk", "e-handel", "innkjøpskjede"
 ]
 
@@ -51,22 +51,20 @@ KW_NOISE = [
 ]
 
 KW_CRITICAL = [
-    "høringsfrist", "frist", "påminnelse", "forslag til endring", 
+    "høringsfrist", "påminnelse", "forslag til endring",
     "crpd", "vedtak", "ikrafttredelse", "overgangsordning",
     "implementering", "gjennomføring"
 ]
 
-# ✅ STABILE KILDER (Verifisert id1160 for Menneskerettigheter)
 RSS_SOURCES = {
     "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
-    "📘 Meldinger": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
+    "📘 Meldinger": "https://www.regjeringen.no/no/dokument/meldst/id1754/?show=rss",
     "📜 Proposisjoner": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
     "🇪🇺 Europapolitikk": "https://www.regjeringen.no/no/tema/europapolitikk/id1160/?show=rss",
     "⚖️ Menneskerettigheter": "https://www.regjeringen.no/no/tema/utenrikssaker/menneskerettigheter/id1160/?show=rss",
     "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss"
 }
 
-# Ulike tidsvinduer per kildetype
 MAX_AGE_DAYS = {
     "📢 Høringer": 90,
     "🏛️ Stortinget": 60,
@@ -74,8 +72,8 @@ MAX_AGE_DAYS = {
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/5.4 (Coop Obs BYGG Compliance)"
-MAX_PDF_SIZE = 10_000_000  # 10MB
+USER_AGENT = "LovSonar/5.2 (Coop Obs BYGG Compliance)"
+MAX_PDF_SIZE = 10_000_000  # 10 MB
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -85,7 +83,6 @@ logger = logging.getLogger(__name__)
 # ===========================================
 
 def verify_config():
-    """Sjekk at nødvendige miljøvariabler er satt"""
     required = ["EMAIL_USER", "EMAIL_PASS", "EMAIL_RECIPIENT"]
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
@@ -141,11 +138,7 @@ def clean_text(text):
     return " ".join(re.sub(r"<[^>]+>", " ", unescape(text)).split()).strip()
 
 def hent_pdf_tekst_intern(session, url, maks_sider=10):
-    """
-    Henter og leser PDF med forbedret feilhåndtering og størrelsessjekk
-    """
     try:
-        # Først HEAD request for å sjekke størrelse
         try:
             head = session.head(url, timeout=10)
             content_length = int(head.headers.get("Content-Length", 0))
@@ -153,24 +146,23 @@ def hent_pdf_tekst_intern(session, url, maks_sider=10):
                 logger.warning(f"📄 PDF for stor ({content_length / 1_000_000:.1f}MB), hopper over")
                 return ""
         except Exception:
-            pass  # Hvis HEAD feiler, prøv likevel
-        
+            pass
+
         r = session.get(url, timeout=30)
         r.raise_for_status()
-        
+
         content_type = r.headers.get("Content-Type", "").lower()
         if "application/pdf" not in content_type and not url.lower().endswith(".pdf"):
             return ""
-        
-        # Sjekk faktisk størrelse
+
         if len(r.content) > MAX_PDF_SIZE:
             logger.warning(f"📄 PDF for stor ({len(r.content) / 1_000_000:.1f}MB), hopper over")
             return ""
-        
+
         reader = PdfReader(BytesIO(r.content))
         tekst = []
         total_pages = len(reader.pages)
-        
+
         for i in range(min(total_pages, maks_sider)):
             try:
                 page_text = reader.pages[i].extract_text()
@@ -178,13 +170,12 @@ def hent_pdf_tekst_intern(session, url, maks_sider=10):
                     tekst.append(page_text)
             except Exception as e:
                 logger.warning(f"Kunne ikke lese side {i+1}: {e}")
-                continue
-        
+
         full_text = " ".join(tekst)
         if full_text:
             logger.info(f"📄 PDF lest OK ({total_pages} sider, {len(full_text)} tegn ekstrahert)")
         return full_text
-        
+
     except Exception as e:
         logger.warning(f"Kunne ikke lese PDF ({url}): {e}")
         return ""
@@ -194,29 +185,21 @@ def hent_pdf_tekst_intern(session, url, maks_sider=10):
 # ===========================================
 
 def analyze_item(conn, session, source_name, title, description, link, pub_date, item_id):
-    """
-    Forbedret analyse med vektet scoring og bedre kritisk-deteksjon
-    """
-    # Dynamisk aldersfilter basert på kilde
     max_days = MAX_AGE_DAYS.get(source_name, MAX_AGE_DAYS["default"])
     if pub_date < (datetime.utcnow() - timedelta(days=max_days)):
         return
-    
-    # Sjekk om allerede sett
+
     if conn.execute("SELECT 1 FROM seen_items WHERE item_id = ?", (str(item_id),)).fetchone():
         return
 
     full_text = f"{title} {description}"
-
-    # Hent PDF-tekst for høringer eller direkte PDF-linker
     if link.lower().endswith(".pdf") or "høring" in title.lower():
         tillegg = hent_pdf_tekst_intern(session, link)
         if tillegg:
             full_text += " " + tillegg
 
     t = full_text.lower()
-    
-    # Filtrer bort støy
+
     if sum(1 for k in KW_NOISE if k in t) > 5:
         conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
@@ -225,51 +208,30 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
         conn.commit()
         return
 
-    # Beregn relevans-score
     segment_score = sum(1 for k in KW_SEGMENT if k in t)
     topic_score = sum(1 for k in KW_TOPIC if k in t)
     critical_score = sum(1 for k in KW_CRITICAL if k in t)
-    
-    # Spesielle flagg
+
     is_hearing = "høring" in source_name.lower() or "høring" in title.lower()
-    
-    # Beslutt om relevant
+
     is_relevant = (
-        (segment_score >= 1 and topic_score >= 2) or  # Standard kriterie
-        critical_score >= 1 or                          # Kritiske nøkkelord
-        (is_hearing and topic_score >= 1)              # Høringer med tema-relevans
+        (segment_score >= 1 and topic_score >= 2) or
+        critical_score >= 1 or
+        (is_hearing and topic_score >= 1)
     )
-    
+
     if is_relevant:
-        logger.info(
-            f"✅ TREFF ({source_name}): {title} "
-            f"[segment={segment_score}, topic={topic_score}, critical={critical_score}]"
-        )
-        
-        # Lagre som sett
+        logger.info(f"✅ TREFF ({source_name}): {title} [segment={segment_score}, topic={topic_score}, critical={critical_score}]")
         conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
             (str(item_id), source_name, title, datetime.utcnow().isoformat()),
         )
-        
-        # Lagre som treff
         conn.execute(
-            "INSERT INTO weekly_hits (source, title, description, link, pub_date, excerpt, "
-            "detected_at, relevance_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                source_name, 
-                title, 
-                description, 
-                link, 
-                pub_date.isoformat(), 
-                description[:500], 
-                datetime.utcnow().isoformat(),
-                segment_score + topic_score + critical_score
-            ),
+            "INSERT INTO weekly_hits (source, title, description, link, pub_date, excerpt, detected_at, relevance_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (source_name, title, description, link, pub_date.isoformat(), description[:500], datetime.utcnow().isoformat(), segment_score + topic_score + critical_score),
         )
         conn.commit()
     else:
-        # Bare marker som sett
         conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
             (str(item_id), source_name, title, datetime.utcnow().isoformat()),
@@ -287,88 +249,71 @@ def check_rss():
             logger.info(f"🔎 Leser RSS: {name}")
             try:
                 r = session.get(url, timeout=20)
-                # Ikke krasj på 404, bare logg warning
                 if r.status_code >= 400:
                     logger.warning(f"RSS HTTP-status {r.status_code} for {name}: {url}")
                     continue
-                
-                # FIX: Bruk BytesIO(r.content) for å unngå XML-encoding-feil
-                feed = feedparser.parse(BytesIO(r.content))
-                
+                feed = feedparser.parse(r.text)
+
                 if getattr(feed, "bozo", 0):
                     logger.warning(f"Mulig XML-feil i {name}: {getattr(feed, 'bozo_exception', '')}")
-                
+
                 items_processed = 0
                 for entry in feed.entries:
                     title = clean_text(entry.get("title", ""))
                     link = entry.get("link", "")
                     guid = entry.get("guid") or make_stable_id(name, link, title)
-                    
+
                     if hasattr(entry, "published_parsed") and entry.published_parsed:
                         p_date = datetime(*entry.published_parsed[:6])
                     else:
                         p_date = datetime.utcnow()
-                    
-                    analyze_item(
-                        conn, session, name, title, 
-                        clean_text(entry.get("description", "")), 
-                        link, p_date, guid
-                    )
+
+                    analyze_item(conn, session, name, title, clean_text(entry.get("description", "")), link, p_date, guid)
                     items_processed += 1
-                
+
                 logger.info(f"  ✓ Prosesserte {items_processed} items fra {name}")
-                
+
             except Exception as e:
                 logger.error(f"❌ Feil ved RSS {name}: {e}")
 
 def check_stortinget():
     logger.info("🏛️ Poller Stortinget ...")
     session = get_http_session()
-    
+
     with sqlite3.connect(DB_PATH) as conn:
         try:
             res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=20).json()
             sid = res.get("innevaerende_sesjon", {}).get("id", "2025-2026")
             logger.info(f"  Aktuell sesjon: {sid}")
-            
+
             page = 1
             total_processed = 0
-            
             while True:
                 url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=50&page={page}&format=json"
                 data = session.get(url, timeout=20).json()
                 saker = unwrap_stortinget_list(data, "saker_liste")
-                
+
                 if not saker:
                     break
-                
+
                 for sak in saker:
                     dg = str(sak.get("dokumentgruppe", "")).lower()
                     if any(x in dg for x in ["spørsmål", "interpellasjon", "referat"]):
                         continue
-                    
+
                     raw_date = sak.get("sist_oppdatert") or sak.get("registrert_dato")
                     p_date = parse_stortinget_date(raw_date)
-                    
-                    analyze_item(
-                        conn,
-                        session,
-                        "🏛️ Stortinget",
-                        sak.get("tittel", ""),
-                        f"Tema: {sak.get('tema', '')}",
-                        f"https://stortinget.no/sak/{sak['id']}",
-                        p_date,
-                        f"ST-{sak['id']}",
-                    )
+
+                    analyze_item(conn, session, "🏛️ Stortinget", sak.get("tittel", ""), f"Tema: {sak.get('tema', '')}", f"https://stortinget.no/sak/{sak['id']}", p_date, f"ST-{sak['id']}")
                     total_processed += 1
-                
+
                 page += 1
                 if page > 5:
                     break
                 time.sleep(1)
-            
+
             logger.info(f"  ✓ Prosesserte {total_processed} saker fra Stortinget")
-            
+
         except Exception as e:
             logger.error(f"❌ Feil mot Stortinget: {e}")
 
@@ -378,63 +323,33 @@ def check_stortinget():
 
 def setup_db():
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS seen_items (item_id TEXT PRIMARY KEY, source TEXT, title TEXT, date_seen TEXT)"
-        )
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS weekly_hits ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "source TEXT, "
-            "title TEXT, "
-            "description TEXT, "
-            "link TEXT, "
-            "pub_date TEXT, "
-            "excerpt TEXT, "
-            "detected_at TEXT, "
-            "relevance_score INTEGER DEFAULT 0)"
-        )
+        conn.execute("CREATE TABLE IF NOT EXISTS seen_items (item_id TEXT PRIMARY KEY, source TEXT, title TEXT, date_seen TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS weekly_hits (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, title TEXT, description TEXT, link TEXT, pub_date TEXT, excerpt TEXT, detected_at TEXT, relevance_score INTEGER DEFAULT 0)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_weekly_detected ON weekly_hits(detected_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_weekly_source ON weekly_hits(source)")
         conn.commit()
 
 def print_weekly_stats():
-    """Skriv ut statistikk for siste uke"""
     with sqlite3.connect(DB_PATH) as conn:
         cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-        
-        # Total per kilde
-        stats = conn.execute("""
-            SELECT source, COUNT(*) as cnt 
-            FROM weekly_hits 
-            WHERE detected_at >= ? 
-            GROUP BY source
-            ORDER BY cnt DESC
-        """, (cutoff,)).fetchall()
-        
-        # Total
-        total = conn.execute("""
-            SELECT COUNT(*) FROM weekly_hits WHERE detected_at >= ?
-        """, (cutoff,)).fetchone()[0]
-        
+        stats = conn.execute("SELECT source, COUNT(*) as cnt FROM weekly_hits WHERE detected_at >= ? GROUP BY source ORDER BY cnt DESC", (cutoff,)).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM weekly_hits WHERE detected_at >= ?", (cutoff,)).fetchone()[0]
+
         logger.info("📊 Ukens statistikk:")
         logger.info(f"  Totalt: {total} treff")
         for source, count in stats:
             logger.info(f"  {source}: {count} treff")
 
 def send_weekly_report():
-    """
-    Sender ukesrapport med forbedret formatering og gruppering
-    """
     email_user = os.environ.get("EMAIL_USER", "").strip()
     email_pass = os.environ.get("EMAIL_PASS", "").strip()
     email_to = os.environ.get("EMAIL_RECIPIENT", email_user).strip()
-    
+
     if not email_user or not email_pass or not email_to:
         logger.warning("⚠️ E-postvariabler mangler. Hopper over ukesrapport.")
         return
 
     cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             "SELECT source, title, link, excerpt, pub_date, relevance_score "
@@ -462,29 +377,29 @@ def send_weekly_report():
         f"**Fokus:** Bærekraft & Byggevarehandel\n",
         "---\n"
     ]
-    
+
     # Per kilde
     for source in sorted(by_source.keys()):
         items = by_source[source]
         md_text.append(f"## {source} ({len(items)} treff)\n")
-        
+
         for _, title, link, excerpt, p_date, score in items:
             d_str = (p_date or "")[:10]
             md_text.append(f"### {title}")
             md_text.append(f"📅 **Dato:** {d_str} | 🎯 **Relevans:** {score} | [Åpne sak]({link})")
-            
+
             # Trim excerpt
             excerpt_clean = excerpt[:300]
             if len(excerpt) > 300:
                 excerpt_clean += "..."
             md_text.append(f"> {excerpt_clean}\n")
-        
+
         md_text.append("---\n")
-    
+
     # Footer med kontekst
     company_context = os.environ.get("COMPANY_CONTEXT", "Obs BYGG - byggevarehandel med fokus på bærekraft.")
     md_text.append(f"\n### 🤖 Organisasjonskontekst\n{company_context}\n")
-    md_text.append(f"\n*Generert av LovSonar v5.4 - {now}*")
+    md_text.append(f"\n*Generert av LovSonar v5.2 - {now}*")
 
     # Send e-post
     msg = MIMEText("\n".join(md_text), "plain", "utf-8")
@@ -505,15 +420,15 @@ def send_weekly_report():
 # ===========================================
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v5.4 starter...")
-    
+    logger.info("🚀 LovSonar v5.2 starter...")
+
     # Setup
     setup_db()
     verify_config()
-    
+
     # Hent modus
     mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
-    
+
     if mode == "weekly":
         logger.info("📅 Kjører i UKESRAPPORT-modus")
         print_weekly_stats()
@@ -523,6 +438,6 @@ if __name__ == "__main__":
         check_rss()
         check_stortinget()
         print_weekly_stats()
-    
+
     logger.info("✅ LovSonar fullført!")
 
