@@ -56,7 +56,7 @@ KW_CRITICAL = [
     "implementering", "gjennomføring"
 ]
 
-# ✅ AKTIVE KILDER (Vi bruker vaskemaskin-funksjonen for å fikse XML-feilene)
+# ✅ AKTIVE KILDER (Bruker aggressiv vaskemaskin for å fikse XML-feil)
 RSS_SOURCES = {
     "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
     "📘 Meldinger": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
@@ -73,7 +73,7 @@ MAX_AGE_DAYS = {
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/5.6 (Coop Obs BYGG Compliance)"
+USER_AGENT = "LovSonar/5.8 (Coop Obs BYGG Compliance)"
 MAX_PDF_SIZE = 10_000_000  # 10MB
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -101,18 +101,19 @@ def get_http_session():
 
 def clean_rss_data(response):
     """
-    🧹 VASKEMASKIN FOR XML:
-    Fjerner ugyldige tegn som får feedparser til å krasje på Regjeringens sider.
+    🧹 BRUTAL VASKEMASKIN (v5.8):
+    1. Dekoder bytes manuelt og IGNORERER feil (kaster ugyldige bytes).
+    2. Fjerner XML-kontrolltegn med Regex.
+    3. Fjerner eksplisitt ugyldige tegnsekvenser som ofte finnes i feeds.
     """
-    # 1. Tving encoding detection
-    response.encoding = response.apparent_encoding
-    text = response.text
+    # 1. Dekod bytes og kast ugyldige tegn rett i søpla
+    text = response.content.decode('utf-8', errors='ignore')
     
-    # 2. Regex som fjerner ugyldige kontrolltegn (Hex 00-08, 0B-0C, 0E-1F)
-    # Dette er "Magic Fix" for 'not well-formed (invalid token)'
+    # 2. Fjern kontrolltegn (Hex 00-08, 0B-0C, 0E-1F) som krasjer XML-parsere
     text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', '', text)
     
-    return text
+    # 3. Trim whitespace
+    return text.strip()
 
 def unwrap_stortinget_list(obj, key_path):
     cur = obj
@@ -286,11 +287,12 @@ def check_rss():
                     logger.warning(f"RSS HTTP-status {r.status_code} for {name}: {url}")
                     continue
                 
-                # ✅ FIX v5.6: Vasker dataene før parsing
+                # ✅ FIX v5.8: Bruk clean_rss_data som dekoder med errors='ignore'
                 cleaned_data = clean_rss_data(r)
                 feed = feedparser.parse(cleaned_data)
                 
                 if getattr(feed, "bozo", 0):
+                    # Med clean_rss_data bør dette skje sjeldnere, men vi logger det for sikkerhets skyld
                     logger.warning(f"Mulig XML-feil i {name}: {getattr(feed, 'bozo_exception', '')}")
                 
                 items_processed = 0
@@ -479,7 +481,7 @@ def send_weekly_report():
     # Footer med kontekst
     company_context = os.environ.get("COMPANY_CONTEXT", "Obs BYGG - byggevarehandel med fokus på bærekraft.")
     md_text.append(f"\n### 🤖 Organisasjonskontekst\n{company_context}\n")
-    md_text.append(f"\n*Generert av LovSonar v5.6 - {now}*")
+    md_text.append(f"\n*Generert av LovSonar v5.8 - {now}*")
 
     # Send e-post
     msg = MIMEText("\n".join(md_text), "plain", "utf-8")
@@ -500,7 +502,7 @@ def send_weekly_report():
 # ===========================================
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v5.6 starter...")
+    logger.info("🚀 LovSonar v5.8 starter...")
     
     # Setup
     setup_db()
