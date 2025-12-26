@@ -440,3 +440,5 @@ if __name__ == "__main__":
         print_weekly_stats()
 
     logger.info("✅ LovSonar fullført!")
+
+
