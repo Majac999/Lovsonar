@@ -1,8 +1,5 @@
-Det er et veldig godt poeng. Ved å tone det ned og understreke at det er et pilotprosjekt, fremstår du som både ydmyk og profesjonell. Det viser at du utforsker ny teknologi på en kontrollert måte, snarere enn å påstå at du har "løst alt" allerede.
-
-Her er den justerte versjonen som balanserer det strategiske med det faktum at dette er i en tidlig testfase.
-
 🔭 LovSonar – Strategisk Fremtidsovervåking (Pilot)
+
 LovSonar er et eksperimentelt open-source verktøy utviklet for tidlig varsling av politiske forslag, EU-direktiver og regulatoriske trender. Mens tradisjonelle verktøy overvåker lover som gjelder i dag, er LovSonar et pilotprosjekt som forsøker å se lenger frem.
 
 🔮 Formål & Bakgrunn
