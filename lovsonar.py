@@ -28,12 +28,12 @@ KW_SEGMENT = ["byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", "di
 KW_TOPIC = ["bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", "aktsomhet", "green claims", "grønnvasking", "reach", "clp", "pfas", "eudr", "epbd", "byggevareforordning", "emballasje", "plastløftet", "merking", "digitalt produktpass", "dpp", "sporbarhet", "epd", "farlige stoffer", "biocid", "voc", "torv", "høringsnotat", "høringsfrist", "universell utforming", "tilgjengelighet", "crpd"]
 KW_NOISE = ["skriv ut", "verktøylinje", "del paragraf", "meny", "til toppen", "personvern"]
 
-# OPPDATERTE URL-ER (Fikser 404-feil)
+# OPPDATERTE URL-ER (Fasit fra ChatGPT - Stabile ID-er)
 RSS_SOURCES = {
-    "📢 Høring": "https://www.regjeringen.no/no/dokument/horingar/id2000001/?show=rss",
-    "📜 Lovforslag": "https://www.regjeringen.no/no/dokument/proposisjonar-og-meldingar/id2000161/?show=rss",
-    "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/dokument/eos-notat/id2000002/?show=rss",
-    "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id2000003/?show=rss"
+    "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
+    "📜 Proposisjoner": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
+    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/?show=rss",
+    "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss"
 }
 
 DB_PATH = "lovsonar_seen.db"
