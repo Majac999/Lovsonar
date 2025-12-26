@@ -149,22 +149,22 @@ def hent_pdf_tekst_intern(session, url, maks_sider=10):
                 return ""
         except Exception:
             pass
-        
+
         r = session.get(url, timeout=30)
         r.raise_for_status()
-        
+
         content_type = r.headers.get("Content-Type", "").lower()
         if "application/pdf" not in content_type and not url.lower().endswith(".pdf"):
             return ""
-        
+
         if len(r.content) > MAX_PDF_SIZE:
             logger.warning(f"📄 PDF for stor ({len(r.content) / 1_000_000:.1f}MB), hopper over")
             return ""
-        
+
         reader = PdfReader(BytesIO(r.content))
         tekst = []
         total_pages = len(reader.pages)
-        
+
         for i in range(min(total_pages, maks_sider)):
             try:
                 page_text = reader.pages[i].extract_text()
@@ -173,12 +173,12 @@ def hent_pdf_tekst_intern(session, url, maks_sider=10):
             except Exception as e:
                 logger.warning(f"Kunne ikke lese side {i+1}: {e}")
                 continue
-        
+
         full_text = " ".join(tekst)
         if full_text:
             logger.info(f"📄 PDF lest OK ({total_pages} sider, {len(full_text)} tegn ekstrahert)")
         return full_text
-        
+
     except Exception as e:
         logger.warning(f"Kunne ikke lese PDF ({url}): {e}")
         return ""
@@ -191,7 +191,7 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
     max_days = MAX_AGE_DAYS.get(source_name, MAX_AGE_DAYS["default"])
     if pub_date < (datetime.utcnow() - timedelta(days=max_days)):
         return
-    
+
     if conn.execute("SELECT 1 FROM seen_items WHERE item_id = ?", (str(item_id),)).fetchone():
         return
 
@@ -203,7 +203,7 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
             full_text += " " + tillegg
 
     t = full_text.lower()
-    
+
     if sum(1 for k in KW_NOISE if k in t) > 5:
         conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
@@ -215,26 +215,26 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
     segment_score = sum(1 for k in KW_SEGMENT if k in t)
     topic_score = sum(1 for k in KW_TOPIC if k in t)
     critical_score = sum(1 for k in KW_CRITICAL if k in t)
-    
+
     is_hearing = "høring" in source_name.lower() or "høring" in title.lower()
-    
+
     is_relevant = (
         (segment_score >= 1 and topic_score >= 2) or
         critical_score >= 1 or
         (is_hearing and topic_score >= 1)
     )
-    
+
     if is_relevant:
         logger.info(
             f"✅ TREFF ({source_name}): {title} "
             f"[segment={segment_score}, topic={topic_score}, critical={critical_score}]"
         )
-        
+
         conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
             (str(item_id), source_name, title, datetime.utcnow().isoformat()),
         )
-        
+
         conn.execute(
             "INSERT INTO weekly_hits (source, title, description, link, pub_date, excerpt, "
             "detected_at, relevance_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -268,30 +268,30 @@ def parse_rss_fallback(content):
     try:
         soup = BeautifulSoup(content, 'xml')
         items = soup.find_all(['item', 'entry']) # Hent både RSS og Atom
-        
+
         if not items:
             soup = BeautifulSoup(content, 'html.parser')
             items = soup.find_all(['item', 'entry'])
-            
+
         result = []
         for item in items:
             # Tittel
             title_tag = item.find('title')
             title = title_tag.get_text(strip=True) if title_tag else "Uten tittel"
-            
+
             # Link
             link = ""
             link_tag = item.find('link')
             if link_tag:
                 link = link_tag.get_text(strip=True) or link_tag.get('href', '')
-            
+
             # Beskrivelse
             desc_tag = item.find(['description', 'summary', 'content'])
             desc = desc_tag.get_text(strip=True) if desc_tag else ""
-            
+
             # Dato (Forenklet fallback: bruk 'nå')
             pub_date = datetime.utcnow()
-            
+
             result.append({
                 'title': title,
                 'link': link,
@@ -312,11 +312,11 @@ def check_rss():
                 r = session.get(url, timeout=20)
                 if r.status_code >= 400:
                     continue
-                
+
                 # Prøv feedparser først
                 feed = feedparser.parse(r.content)
                 entries = []
-                
+
                 if getattr(feed, "bozo", 0) or not feed.entries:
                     # Fallback til BeautifulSoup (Plan B)
                     raw_items = parse_rss_fallback(r.content)
@@ -336,43 +336,42 @@ def check_rss():
                     title = clean_text(getattr(entry, 'title', ''))
                     link = getattr(entry, 'link', '')
                     guid = make_stable_id(name, link, title)
-                    
+
                     if hasattr(entry, 'published_parsed') and entry.published_parsed:
                         p_date = datetime(*entry.published_parsed[:6])
                     else:
                         p_date = datetime.utcnow()
-                    
+
                     desc = clean_text(getattr(entry, 'description', ''))
-                    
+
                     analyze_item(conn, session, name, title, desc, link, p_date, guid)
                     items_processed += 1
-                
+
                 logger.info(f"  ✓ Prosesserte {items_processed} items fra {name}")
-                
+
             except Exception as e:
                 logger.error(f"❌ Feil ved RSS {name}: {e}")
 
 def check_stortinget():
     logger.info("🏛️ Poller Stortinget ...")
     session = get_http_session()
-    
+
     with sqlite3.connect(DB_PATH) as conn:
         try:
             res = session.get("https://data.stortinget.no/eksport/sesjoner?format=json", timeout=20).json()
             sid = res.get("innevaerende_sesjon", {}).get("id", "2025-2026")
             logger.info(f"  Aktuell sesjon: {sid}")
-            
+
             page = 1
             total_processed = 0
-            
+
             while True:
                 url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=50&page={page}&format=json"
                 data = session.get(url, timeout=20).json()
                 saker = unwrap_stortinget_list(data, "saker_liste")
-                
+
                 if not saker:
                     break
-                
+
                 for sak in saker:
                     dg = str(sak.get("dokumentgruppe", "")).lower
-        
