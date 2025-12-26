@@ -28,12 +28,11 @@ KW_TOPIC = ["bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi",
 KW_NOISE = ["skriv ut", "verktøylinje", "del paragraf", "meny", "til toppen", "personvern"]
 
 RSS_SOURCES = {
-    "📢 Høring": "https://www.regjeringen.no/no/dokument/horinger/rss/",
-    "📜 Lovforslag": "https://www.regjeringen.no/no/dokument/proposisjoner/rss/",
-    "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/dokument/eos-notater/rss/",
-    "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/rss/"
+    "📢 Høring": "https://www.regjeringen.no/no/dokument/horingar/id2000001/?show=rss",
+    "📜 Lovforslag": "https://www.regjeringen.no/no/dokument/proposisjonar-og-meldingar/id2000161/?show=rss",
+    "🇪🇺 EØS-notat": "https://www.regjeringen.no/no/dokument/eos-notat/id2000002/?show=rss",
+    "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id2000003/?show=rss"
 }
-
 DB_PATH = "lovsonar_seen.db"
 USER_AGENT = "LovSonar/2.6 (Strategic Compliance Tool)"
 
