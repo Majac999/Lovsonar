@@ -1,63 +1,73 @@
 🔭 LovSonar – Strategisk Fremtidsovervåking & Risikoanalyse
-Et Open Source-verktøy for tidlig varsling av politiske forslag, EU-direktiver og bransjetrender.
+LovSonar er et open-source verktøy for tidlig varsling av politiske forslag, EU-direktiver og bransjetrender. Mens tradisjonelle verktøy (som f.eks. LovRadar) overvåker lover som gjelder i dag, er LovSonar designet for å se over horisonten.
 
-🔮 Om prosjektet
-Mens tradisjonelle verktøy (som LovRadar) passer på lovene som gjelder i dag, er LovSonar designet for å se inn i fremtiden. Dette er et strategisk verktøy.
+🔮 Formål
+Målet med prosjektet er å fange opp politiske signaler og kommende regulatoriske krav (f.eks. fra EU) før de blir vedtatt. Dette gir virksomheter nødvendig tid til strategisk omstilling, kostnadseffektiv tilpasning og proaktiv markedsføring.
 
-Målet er å fange opp politiske signaler og kommende EU-krav før de blir vedtatt, slik at virksomheter kan omstille seg kostnadseffektivt og unngå panikktiltak.
+Strategisk Verdi:
 
-Status: 🟢 Live (Pilotfase)
+Risikostyring: Identifiserer kommende avgifter og dokumentasjonskrav 12–36 måneder før innføring.
+
+EMV-sikring: Forutser krav til produktdesign og emballasje som treffer egne merkevarer (Private Labels).
+
+Markedsposisjonering: Muliggjør kommunikasjon av bærekraftstiltak før de blir lovpålagte krav.
 
 🎯 Hva speider verktøyet etter?
-Systemet skanner løpende etter signaler som kan påvirke byggevarehandelens og varehandelens rammevilkår 1–5 år frem i tid. Det overvåker spesifikke nøkkelord (f.eks. torvuttak, engangsplast, ombruk, digitale produktpass) i tre hovedkanaler:
+Systemet skanner løpende etter signaler som påvirker varehandelens rammevilkår i et 1–5 års perspektiv.
 
-1. Norsk Politikk & Lovarbeid 🇳🇴
-Stortingsforslag: Hva foreslår partiene (f.eks. forbud, avgifter)?
+Norsk Politikk & Lovarbeid 🇳🇴
 
-Høringer & NOU-er: Offentlige utredninger som ofte blir lov 1-2 år senere.
+Stortingsforslag (Representantforslag, Dok 8).
 
-Regjeringsplattformer: Signaler om satsingsområder (sirkulærøkonomi, energi).
+Offentlige utredninger (NOU) og høringsnotater.
 
-2. EU & EØS-signaler 🇪🇺
-Green Deal-pakker: Kommende forordninger (ESPR, PPWR).
+Regjeringsplattformer og stortingsmeldinger.
 
-EØS-notater: Hvilke EU-lover er på vei inn i norsk rett?
+EU & EØS-signaler 🇪🇺
 
-Standardisering: Nye ISO/NS-krav til byggevarer.
+"Green Deal"-pakker (f.eks. ESPR, PPWR).
 
-3. Bransje & Marked 🏗️
-Bransjeorganisasjoner: Rapporter/utspill fra aktører som Virke og NHO.
+EØS-notater om implementering av EU-rett i Norge.
 
-Konkurranselandskap: Trender innen bærekraft, digitalisering og AI i varehandelen.
+Digitale produktpass (DPP) og sporbarhetskrav.
 
-🤖 Hvordan det virker (Workflow)
-LovSonar er bygget på Python og kjører automatisk via GitHub Actions. Prosessen er todelt:
+Regulatoriske Trender 🏗️
 
-Fangst & Filtrering (Python):
+Krav til sirkulærøkonomi (ombruk, returordninger).
 
-Roboten henter inn nye RSS-strømmer fra Regjeringen og Stortinget.
+Restriksjoner på kjemikalier, emballasje og naturinngrep.
 
-Sorterer bort støy ved hjelp av en definert søkeliste ("Keywords").
+🤖 Slik fungerer det (Workflow)
+LovSonar kjører automatisk via GitHub Actions og følger en strukturert prosess:
 
-Lagrer relevante treff i en database for å unngå duplikater.
+Innsamling & Dypanalyse (Python):
 
-Analyse & Strategi (AI-støttet):
+Henter RSS-strømmer fra Stortinget og Regjeringen.
 
-Systemet genererer en ukentlig rapport.
+Gjennomfører automatisk dypanalyse av vedlagte dokumenter (PDF) for å fange opp detaljer som ikke fremkommer i overskrifter.
 
-Rapporten er klargjort for behandling med LLM (Large Language Model), som vurderer:
+Bruker avansert filtreringslogikk for å skille strategiske signaler fra administrativ støy.
 
-Sannsynlighet: Blir dette faktisk lov?
+Lagring & Dedublering:
 
-Konsekvens: Treffer dette bunnlinjen eller driften?
+SQLite-database sikrer at samme signal kun behandles én gang.
 
-Tidshorisont: Når må vi være klare?
+AI-støttet Analyse:
+
+Genererer rapporter klargjort for LLM-behandling (Large Language Models).
+
+Vurderer saken ut fra Sannsynlighet (blir det lov?), Konsekvens (treffer det bunnlinjen?) og Tidshorisont.
 
 🛠 Teknisk Stack
-Språk: Python 3.10
+Språk: Python 3.10+
 
-Database: SQLite
+Biblioteker: feedparser, pypdf, requests (med robust retry-logikk).
 
-Automasjon: GitHub Actions (Cron jobs)
+Database: SQLite.
 
-Varsling: E-post (SMTP) med AI-ready prompts.
+Automasjon: GitHub Actions (Cron jobs).
+
+Arkitektur: Modulær oppbygging for enkel utvidelse til nye kilder.
+
+⚖️ Lisens & Bruk
+Dette prosjektet er tilgjengelig som Open Source. Verktøyet er ment som beslutningsstøtte og erstatter ikke profesjonell juridisk rådgivning.
