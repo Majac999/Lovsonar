@@ -56,6 +56,7 @@ KW_CRITICAL = [
     "implementering", "gjennomføring"
 ]
 
+# ✅ STABILE KILDER (Verifisert id1160 for Menneskerettigheter)
 RSS_SOURCES = {
     "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
     "📘 Meldinger": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
@@ -73,7 +74,7 @@ MAX_AGE_DAYS = {
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/5.3 (Coop Obs BYGG Compliance)"
+USER_AGENT = "LovSonar/5.4 (Coop Obs BYGG Compliance)"
 MAX_PDF_SIZE = 10_000_000  # 10MB
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -483,7 +484,7 @@ def send_weekly_report():
     # Footer med kontekst
     company_context = os.environ.get("COMPANY_CONTEXT", "Obs BYGG - byggevarehandel med fokus på bærekraft.")
     md_text.append(f"\n### 🤖 Organisasjonskontekst\n{company_context}\n")
-    md_text.append(f"\n*Generert av LovSonar v5.3 - {now}*")
+    md_text.append(f"\n*Generert av LovSonar v5.4 - {now}*")
 
     # Send e-post
     msg = MIMEText("\n".join(md_text), "plain", "utf-8")
@@ -504,7 +505,7 @@ def send_weekly_report():
 # ===========================================
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v5.3 starter...")
+    logger.info("🚀 LovSonar v5.4 starter...")
     
     # Setup
     setup_db()
