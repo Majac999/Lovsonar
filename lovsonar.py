@@ -25,7 +25,7 @@ except ImportError:
 # ===========================================
 
 KW_SEGMENT = ["byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", "discount", "billigkjede", "gds", "diy", "ombruk", "materialbank", "produktdatabase", "byggtjeneste", "varehandel", "samvirkelag", "coop", "obs bygg"]
-KW_TOPIC = ["bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", "aktsomhet", "green claims", "grønnvasking", "reach", "clp", "pfas", "eudr", "epbd", "byggevareforordning", "emballasje", "plastløftet", "merking", "digitalt produktpass", "dpp", "sporbarhet", "epd", "farlige stoffer", "biocid", "voc", "torv", "høringsnotat", "høringsfrist"]
+KW_TOPIC = ["bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", "aktsomhet", "green claims", "grønnvasking", "reach", "clp", "pfas", "eudr", "epbd", "byggevareforordning", "emballasje", "plastløftet", "merking", "digitalt produktpass", "dpp", "sporbarhet", "epd", "farlige stoffer", "biocid", "voc", "torv", "høringsnotat", "høringsfrist", "universell utforming", "tilgjengelighet", "crpd"]
 KW_NOISE = ["skriv ut", "verktøylinje", "del paragraf", "meny", "til toppen", "personvern"]
 
 # OPPDATERTE URL-ER (Fikser 404-feil)
@@ -90,11 +90,15 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
             return
 
         full_text = f"{title} {description}"
-        # Sjekk PDF hvis aktuelt
+        
+        # Sjekk PDF hvis aktuelt (Med ekstra feilhåndtering)
         if pdf_leser and (link.lower().endswith(".pdf") or "høring" in title.lower()):
-            tillegg = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
-            if tillegg and "FEIL" not in tillegg:
-                full_text += " " + tillegg
+            try:
+                tillegg = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
+                if tillegg and "FEIL" not in tillegg:
+                    full_text += " " + tillegg
+            except Exception as e:
+                logger.warning(f"Kunne ikke lese PDF for {title}: {e}")
 
         # AND-logikk
         t = full_text.lower()
@@ -171,8 +175,14 @@ def check_stortinget():
         logger.error(f"Feil mot Stortinget: {e}")
 
 # ===========================================
-# 5. RAPPORTERING (Ukesrapport)
+# 5. DATABASE & RAPPORTERING
 # ===========================================
+
+def setup_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS seen_items (item_id TEXT PRIMARY KEY, source TEXT, title TEXT, date_seen TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS weekly_hits (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, title TEXT, description TEXT, link TEXT, pub_date TEXT, excerpt TEXT, detected_at TEXT)")
+        conn.commit()
 
 def send_weekly_report():
     email_user = os.environ.get("EMAIL_USER", "").strip()
