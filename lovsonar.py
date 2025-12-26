@@ -50,7 +50,7 @@ def get_http_session():
     session = requests.Session()
     retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retry))
-    session.mount("http://", HTTPAdapter(max_retries=retry)) # Lagt til HTTP støtte
+    session.mount("http://", HTTPAdapter(max_retries=retry)) 
     session.headers.update({"User-Agent": USER_AGENT})
     return session
 
@@ -92,7 +92,7 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
 
         full_text = f"{title} {description}"
         
-        # Sjekk PDF hvis aktuelt (Med try/except)
+        # Sjekk PDF hvis aktuelt
         if pdf_leser and (link.lower().endswith(".pdf") or "høring" in title.lower()):
             try:
                 tillegg = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
@@ -139,7 +139,7 @@ def check_rss():
                 link = entry.get("link", "")
                 guid = entry.get("guid") or make_stable_id(name, link, title)
                 
-                # Robust datoparsing (hindrer None-feil)
+                # Robust datoparsing
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     p_date = datetime(*entry.published_parsed[:6])
                 else:
@@ -189,7 +189,7 @@ def setup_db():
         conn.execute("CREATE TABLE IF NOT EXISTS seen_items (item_id TEXT PRIMARY KEY, source TEXT, title TEXT, date_seen TEXT)")
         conn.execute("CREATE TABLE IF NOT EXISTS weekly_hits (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, title TEXT, description TEXT, link TEXT, pub_date TEXT, excerpt TEXT, detected_at TEXT)")
         
-        # Indekser for ytelse (Lagt til basert på feedback)
+        # Indekser for ytelse
         conn.execute("CREATE INDEX IF NOT EXISTS idx_weekly_detected ON weekly_hits(detected_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_source ON seen_items(source)")
         
@@ -242,4 +242,4 @@ if __name__ == "__main__":
         send_weekly_report()
     else:
         check_rss()
-        check_stortinget()check_stortinget()
+        check_stortinget()
