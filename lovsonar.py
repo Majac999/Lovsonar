@@ -1,4 +1,5 @@
 import sqlite3
+import feedparser
 import logging
 import os
 import smtplib
@@ -14,7 +15,7 @@ from urllib3.util.retry import Retry
 from io import BytesIO
 from pypdf import PdfReader
 from collections import defaultdict
-from bs4 import BeautifulSoup  # VIKTIG: Brukes nå som fallback for ødelagt XML
+from bs4 import BeautifulSoup
 
 # ===========================================
 # 1. KONFIGURASJON & NØKKELORD
@@ -72,7 +73,7 @@ MAX_AGE_DAYS = {
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/6.0 (Coop Obs BYGG Compliance)"
+USER_AGENT = "LovSonar/6.1 (Coop Obs BYGG Compliance)"
 MAX_PDF_SIZE = 10_000_000  # 10MB
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -256,42 +257,51 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
         conn.commit()
 
 # ===========================================
-# 4. INNSAMLING MED FALLBACK (BS4)
+# 4. INNSAMLING MED ATOM-STØTTE (v6.1)
 # ===========================================
 
-def parse_rss_with_bs4(content):
+def parse_rss_fallback(content):
     """
-    Når feedparser feiler, bruker vi BeautifulSoup til å lese XML som om det var HTML.
-    Dette ignorerer strukturelle feil ("invalid token").
+    Plan B: Bruk BeautifulSoup til å lese både RSS (<item>) og Atom (<entry>).
     """
-    soup = BeautifulSoup(content, 'xml') # Prøv XML-parser først
-    if not soup.find('item'):
-        soup = BeautifulSoup(content, 'html.parser') # Fallback til HTML-parser
-    
-    items = []
-    for item in soup.find_all('item'):
-        title = item.find('title').get_text(strip=True) if item.find('title') else ""
-        link = item.find('link').get_text(strip=True) if item.find('link') else ""
-        desc = item.find('description').get_text(strip=True) if item.find('description') else ""
+    try:
+        soup = BeautifulSoup(content, 'xml')
+        items = soup.find_all(['item', 'entry']) # Hent både RSS og Atom
         
-        # Prøv å finne dato
-        pub_date = datetime.utcnow()
-        pub_str = item.find('pubDate')
-        if pub_str:
-            try:
-                # Enkel parsing av RSS datoformat, ellers bruk nåtid
-                # (Dette kan utvides hvis nødvendig, men 'nå' er tryggest ved feil)
-                pub_date = datetime.utcnow() 
-            except:
-                pass
-        
-        items.append({
-            'title': title,
-            'link': link,
-            'description': desc,
-            'pub_date': pub_date
-        })
-    return items
+        if not items:
+            soup = BeautifulSoup(content, 'html.parser')
+            items = soup.find_all(['item', 'entry'])
+            
+        result = []
+        for item in items:
+            # Tittel
+            title_tag = item.find('title')
+            title = title_tag.get_text(strip=True) if title_tag else "Uten tittel"
+            
+            # Link (kan være <link>tekst</link> eller <link href="..." />)
+            link = ""
+            link_tag = item.find('link')
+            if link_tag:
+                link = link_tag.get_text(strip=True) or link_tag.get('href', '')
+            
+            # Beskrivelse (description, summary eller content)
+            desc_tag = item.find(['description', 'summary', 'content'])
+            desc = desc_tag.get_text(strip=True) if desc_tag else ""
+            
+            # Dato (pubDate, published, updated)
+            # Vi forenkler og bruker 'nå' hvis parsing er vanskelig i fallback-modus
+            pub_date = datetime.utcnow()
+            
+            result.append({
+                'title': title,
+                'link': link,
+                'description': desc,
+                'pub_date': pub_date
+            })
+        return result
+    except Exception as e:
+        logger.warning(f"Fallback parsing feilet også: {e}")
+        return []
 
 def check_rss():
     session = get_http_session()
@@ -303,22 +313,38 @@ def check_rss():
                 if r.status_code >= 400:
                     continue
                 
-                # --- STRATEGI: BS4 FALLBACK (Fordi feedparser krasjer på Regjeringens XML) ---
-                # Vi bruker BeautifulSoup direkte. Den bryr seg ikke om "invalid tokens".
-                entries = parse_rss_with_bs4(r.content)
+                # Prøv feedparser først
+                feed = feedparser.parse(r.content)
+                entries = []
                 
+                if getattr(feed, "bozo", 0) or not feed.entries:
+                    # Hvis feedparser feiler, bruk BeautifulSoup (Plan B)
+                    raw_items = parse_rss_fallback(r.content)
+                    for item in raw_items:
+                        class MockEntry: pass
+                        e = MockEntry()
+                        e.title = item['title']
+                        e.link = item['link']
+                        e.description = item['description']
+                        e.published_parsed = item['pub_date'].timetuple()
+                        entries.append(e)
+                else:
+                    entries = feed.entries
+
                 items_processed = 0
                 for entry in entries:
-                    title = clean_text(entry['title'])
-                    link = entry['link']
+                    title = clean_text(getattr(entry, 'title', ''))
+                    link = getattr(entry, 'link', '')
                     guid = make_stable_id(name, link, title)
-                    p_date = entry['pub_date']
                     
-                    analyze_item(
-                        conn, session, name, title, 
-                        clean_text(entry['description']), 
-                        link, p_date, guid
-                    )
+                    if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                        p_date = datetime(*entry.published_parsed[:6])
+                    else:
+                        p_date = datetime.utcnow()
+                    
+                    desc = clean_text(getattr(entry, 'description', ''))
+                    
+                    analyze_item(conn, session, name, title, desc, link, p_date, guid)
                     items_processed += 1
                 
                 logger.info(f"  ✓ Prosesserte {items_processed} items fra {name}")
@@ -489,7 +515,7 @@ def send_weekly_report():
     # Footer med kontekst
     company_context = os.environ.get("COMPANY_CONTEXT", "Obs BYGG - byggevarehandel med fokus på bærekraft.")
     md_text.append(f"\n### 🤖 Organisasjonskontekst\n{company_context}\n")
-    md_text.append(f"\n*Generert av LovSonar v6.0 - {now}*")
+    md_text.append(f"\n*Generert av LovSonar v6.1 - {now}*")
 
     # Send e-post
     msg = MIMEText("\n".join(md_text), "plain", "utf-8")
@@ -510,7 +536,7 @@ def send_weekly_report():
 # ===========================================
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v6.0 starter...")
+    logger.info("🚀 LovSonar v6.1 starter...")
     
     # Setup
     setup_db()
