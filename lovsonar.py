@@ -56,7 +56,7 @@ KW_CRITICAL = [
     "implementering", "gjennomføring"
 ]
 
-# ✅ KORRIGERT: Menneskerettigheter peker på riktig ID
+# ✅ AKTIVE KILDER (Vi bruker vaskemaskin-funksjonen for å fikse XML-feilene)
 RSS_SOURCES = {
     "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
     "📘 Meldinger": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
@@ -66,7 +66,6 @@ RSS_SOURCES = {
     "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss"
 }
 
-# Ulike tidsvinduer per kildetype
 MAX_AGE_DAYS = {
     "📢 Høringer": 90,
     "🏛️ Stortinget": 60,
@@ -74,7 +73,7 @@ MAX_AGE_DAYS = {
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/5.4 (Coop Obs BYGG Compliance)"
+USER_AGENT = "LovSonar/5.6 (Coop Obs BYGG Compliance)"
 MAX_PDF_SIZE = 10_000_000  # 10MB
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -85,7 +84,6 @@ logger = logging.getLogger(__name__)
 # ===========================================
 
 def verify_config():
-    """Sjekk at nødvendige miljøvariabler er satt"""
     required = ["EMAIL_USER", "EMAIL_PASS", "EMAIL_RECIPIENT"]
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
@@ -100,6 +98,21 @@ def get_http_session():
     session.mount("https://", HTTPAdapter(max_retries=retry))
     session.headers.update({"User-Agent": USER_AGENT})
     return session
+
+def clean_rss_data(response):
+    """
+    🧹 VASKEMASKIN FOR XML:
+    Fjerner ugyldige tegn som får feedparser til å krasje på Regjeringens sider.
+    """
+    # 1. Tving encoding detection
+    response.encoding = response.apparent_encoding
+    text = response.text
+    
+    # 2. Regex som fjerner ugyldige kontrolltegn (Hex 00-08, 0B-0C, 0E-1F)
+    # Dette er "Magic Fix" for 'not well-formed (invalid token)'
+    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', '', text)
+    
+    return text
 
 def unwrap_stortinget_list(obj, key_path):
     cur = obj
@@ -141,11 +154,7 @@ def clean_text(text):
     return " ".join(re.sub(r"<[^>]+>", " ", unescape(text)).split()).strip()
 
 def hent_pdf_tekst_intern(session, url, maks_sider=10):
-    """
-    Henter og leser PDF med forbedret feilhåndtering og størrelsessjekk
-    """
     try:
-        # Først HEAD request for å sjekke størrelse
         try:
             head = session.head(url, timeout=10)
             content_length = int(head.headers.get("Content-Length", 0))
@@ -153,7 +162,7 @@ def hent_pdf_tekst_intern(session, url, maks_sider=10):
                 logger.warning(f"📄 PDF for stor ({content_length / 1_000_000:.1f}MB), hopper over")
                 return ""
         except Exception:
-            pass  # Hvis HEAD feiler, prøv likevel
+            pass
         
         r = session.get(url, timeout=30)
         r.raise_for_status()
@@ -162,7 +171,6 @@ def hent_pdf_tekst_intern(session, url, maks_sider=10):
         if "application/pdf" not in content_type and not url.lower().endswith(".pdf"):
             return ""
         
-        # Sjekk faktisk størrelse
         if len(r.content) > MAX_PDF_SIZE:
             logger.warning(f"📄 PDF for stor ({len(r.content) / 1_000_000:.1f}MB), hopper over")
             return ""
@@ -190,25 +198,19 @@ def hent_pdf_tekst_intern(session, url, maks_sider=10):
         return ""
 
 # ===========================================
-# 3. ANALYSE MED FORBEDRET SCORING
+# 3. ANALYSE LOGIKK
 # ===========================================
 
 def analyze_item(conn, session, source_name, title, description, link, pub_date, item_id):
-    """
-    Forbedret analyse med vektet scoring og bedre kritisk-deteksjon
-    """
-    # Dynamisk aldersfilter basert på kilde
     max_days = MAX_AGE_DAYS.get(source_name, MAX_AGE_DAYS["default"])
     if pub_date < (datetime.utcnow() - timedelta(days=max_days)):
         return
     
-    # Sjekk om allerede sett
     if conn.execute("SELECT 1 FROM seen_items WHERE item_id = ?", (str(item_id),)).fetchone():
         return
 
     full_text = f"{title} {description}"
 
-    # Hent PDF-tekst for høringer eller direkte PDF-linker
     if link.lower().endswith(".pdf") or "høring" in title.lower():
         tillegg = hent_pdf_tekst_intern(session, link)
         if tillegg:
@@ -216,7 +218,6 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
 
     t = full_text.lower()
     
-    # Filtrer bort støy
     if sum(1 for k in KW_NOISE if k in t) > 5:
         conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
@@ -225,19 +226,16 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
         conn.commit()
         return
 
-    # Beregn relevans-score
     segment_score = sum(1 for k in KW_SEGMENT if k in t)
     topic_score = sum(1 for k in KW_TOPIC if k in t)
     critical_score = sum(1 for k in KW_CRITICAL if k in t)
     
-    # Spesielle flagg
     is_hearing = "høring" in source_name.lower() or "høring" in title.lower()
     
-    # Beslutt om relevant
     is_relevant = (
-        (segment_score >= 1 and topic_score >= 2) or  # Standard kriterie
-        critical_score >= 1 or                          # Kritiske nøkkelord
-        (is_hearing and topic_score >= 1)              # Høringer med tema-relevans
+        (segment_score >= 1 and topic_score >= 2) or
+        critical_score >= 1 or
+        (is_hearing and topic_score >= 1)
     )
     
     if is_relevant:
@@ -246,13 +244,11 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
             f"[segment={segment_score}, topic={topic_score}, critical={critical_score}]"
         )
         
-        # Lagre som sett
         conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
             (str(item_id), source_name, title, datetime.utcnow().isoformat()),
         )
         
-        # Lagre som treff
         conn.execute(
             "INSERT INTO weekly_hits (source, title, description, link, pub_date, excerpt, "
             "detected_at, relevance_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -269,7 +265,6 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
         )
         conn.commit()
     else:
-        # Bare marker som sett
         conn.execute(
             "INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?, ?, ?, ?)",
             (str(item_id), source_name, title, datetime.utcnow().isoformat()),
@@ -287,14 +282,13 @@ def check_rss():
             logger.info(f"🔎 Leser RSS: {name}")
             try:
                 r = session.get(url, timeout=20)
-                # Ikke krasj på 404, bare logg warning
                 if r.status_code >= 400:
                     logger.warning(f"RSS HTTP-status {r.status_code} for {name}: {url}")
                     continue
                 
-                # ✅ FIX: Bruk r.content (bytes) direkte, ikke r.text og ikke BytesIO
-                # Feedparser detekterer encoding best fra rå bytes.
-                feed = feedparser.parse(r.content)
+                # ✅ FIX v5.6: Vasker dataene før parsing
+                cleaned_data = clean_rss_data(r)
+                feed = feedparser.parse(cleaned_data)
                 
                 if getattr(feed, "bozo", 0):
                     logger.warning(f"Mulig XML-feil i {name}: {getattr(feed, 'bozo_exception', '')}")
@@ -485,7 +479,7 @@ def send_weekly_report():
     # Footer med kontekst
     company_context = os.environ.get("COMPANY_CONTEXT", "Obs BYGG - byggevarehandel med fokus på bærekraft.")
     md_text.append(f"\n### 🤖 Organisasjonskontekst\n{company_context}\n")
-    md_text.append(f"\n*Generert av LovSonar v5.4 - {now}*")
+    md_text.append(f"\n*Generert av LovSonar v5.6 - {now}*")
 
     # Send e-post
     msg = MIMEText("\n".join(md_text), "plain", "utf-8")
@@ -506,7 +500,7 @@ def send_weekly_report():
 # ===========================================
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v5.4 starter...")
+    logger.info("🚀 LovSonar v5.6 starter...")
     
     # Setup
     setup_db()
