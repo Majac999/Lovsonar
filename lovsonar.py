@@ -37,7 +37,7 @@ RSS_SOURCES = {
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/2.6 (Strategic Compliance Tool)"
+USER_AGENT = "LovSonar/2.7 (Strategic Compliance Tool)"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ def get_http_session():
     session = requests.Session()
     retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.mount("http://", HTTPAdapter(max_retries=retry)) # Lagt til HTTP støtte
     session.headers.update({"User-Agent": USER_AGENT})
     return session
 
@@ -91,7 +92,7 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
 
         full_text = f"{title} {description}"
         
-        # Sjekk PDF hvis aktuelt (Med ekstra feilhåndtering)
+        # Sjekk PDF hvis aktuelt (Med try/except)
         if pdf_leser and (link.lower().endswith(".pdf") or "høring" in title.lower()):
             try:
                 tillegg = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
@@ -137,7 +138,12 @@ def check_rss():
                 title = clean_text(entry.get("title", ""))
                 link = entry.get("link", "")
                 guid = entry.get("guid") or make_stable_id(name, link, title)
-                p_date = datetime(*entry.published_parsed[:6]) if hasattr(entry, "published_parsed") else datetime.utcnow()
+                
+                # Robust datoparsing (hindrer None-feil)
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    p_date = datetime(*entry.published_parsed[:6])
+                else:
+                    p_date = datetime.utcnow()
                 
                 analyze_item(name, title, clean_text(entry.get("description", "")), link, p_date, guid)
         except Exception as e:
@@ -182,6 +188,11 @@ def setup_db():
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS seen_items (item_id TEXT PRIMARY KEY, source TEXT, title TEXT, date_seen TEXT)")
         conn.execute("CREATE TABLE IF NOT EXISTS weekly_hits (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, title TEXT, description TEXT, link TEXT, pub_date TEXT, excerpt TEXT, detected_at TEXT)")
+        
+        # Indekser for ytelse (Lagt til basert på feedback)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_weekly_detected ON weekly_hits(detected_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_source ON seen_items(source)")
+        
         conn.commit()
 
 def send_weekly_report():
@@ -231,4 +242,4 @@ if __name__ == "__main__":
         send_weekly_report()
     else:
         check_rss()
-        check_stortinget()
+        check_stortinget()check_stortinget()
