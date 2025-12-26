@@ -25,16 +25,16 @@ KW_SEGMENT = ["byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", "di
 KW_TOPIC = ["bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", "aktsomhet", "green claims", "grønnvasking", "reach", "clp", "pfas", "eudr", "epbd", "byggevareforordning", "emballasje", "plastløftet", "merking", "digitalt produktpass", "dpp", "sporbarhet", "epd", "farlige stoffer", "biocid", "voc", "torv", "høringsnotat", "høringsfrist", "universell utforming", "tilgjengelighet", "crpd"]
 KW_NOISE = ["skriv ut", "verktøylinje", "del paragraf", "meny", "til toppen", "personvern"]
 
-# ✅ STABILE RSS-URLER (ID-er som ikke endres)
+# ✅ STABILE RSS-URLER (Korrigert EØS-lenke til id86895)
 RSS_SOURCES = {
     "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
     "📜 Proposisjoner": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
-    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/tema/europapolitikk/eos-notater/id669358/?show=rss",
+    "🇪🇺 EØS-notater": "https://www.regjeringen.no/no/dokument/eos-notater/id86895/?show=rss",
     "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss"
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/3.1 (Strategic Compliance Tool)"
+USER_AGENT = "LovSonar/3.3 (Strategic Compliance Tool)"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ def clean_text(text):
     return " ".join(re.sub(r"<[^>]+>", " ", unescape(text)).split()).strip()
 
 # ===========================================
-# 3. INTERN PDF-LESER (Nytt!)
+# 3. INTERN PDF-LESER
 # ===========================================
 def hent_pdf_tekst_intern(url, maks_sider=10):
     """Laster ned og leser PDF direkte i minnet uten ekstra filer."""
@@ -112,7 +112,7 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
         
         # Sjekk PDF hvis relevant
         if link.lower().endswith(".pdf") or "høring" in title.lower():
-            tillegg = hent_pdf_tekst_intern(link) # Kaller den nye interne funksjonen
+            tillegg = hent_pdf_tekst_intern(link) 
             if tillegg:
                 full_text += " " + tillegg
 
@@ -210,7 +210,6 @@ def send_weekly_report():
     email_to = os.environ.get("EMAIL_RECIPIENT", email_user).strip()
     
     if not email_user or not email_pass or not email_to:
-        logger.warning("Mangler e-postoppsett, sender ikke rapport.")
         return
 
     cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
