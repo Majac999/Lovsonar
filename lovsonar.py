@@ -28,7 +28,7 @@ KW_SEGMENT = ["byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", "di
 KW_TOPIC = ["bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", "aktsomhet", "green claims", "grønnvasking", "reach", "clp", "pfas", "eudr", "epbd", "byggevareforordning", "emballasje", "plastløftet", "merking", "digitalt produktpass", "dpp", "sporbarhet", "epd", "farlige stoffer", "biocid", "voc", "torv", "høringsnotat", "høringsfrist", "universell utforming", "tilgjengelighet", "crpd"]
 KW_NOISE = ["skriv ut", "verktøylinje", "del paragraf", "meny", "til toppen", "personvern"]
 
-# OPPDATERTE URL-ER (Fasit fra ChatGPT - Stabile ID-er)
+# OPPDATERTE URL-ER (Stabile ID-er som fikser 404-feil)
 RSS_SOURCES = {
     "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
     "📜 Proposisjoner": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
