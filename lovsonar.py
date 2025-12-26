@@ -13,14 +13,9 @@ from email.header import Header
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# ===========================================
-# 0. PDF-STØTTE (KRITISK)
-# ===========================================
-try:
-    import pdf_leser
-except ImportError:
-    pdf_leser = None
-    print("⚠️ ADVARSEL: Fant ikke pdf_leser.py. PDF-analyse vil ikke fungere.")
+# NYTT: Vi importerer PDF-verktøy direkte her
+from io import BytesIO
+from pypdf import PdfReader
 
 # ===========================================
 # 1. KONFIGURASJON & NØKKELORD
@@ -30,7 +25,7 @@ KW_SEGMENT = ["byggevare", "byggevarehus", "trelast", "jernvare", "lavpris", "di
 KW_TOPIC = ["bærekraft", "sirkulær", "gjenvinning", "miljøkrav", "taksonomi", "esg", "espr", "ecodesign", "ppwr", "cbam", "csrd", "csddd", "aktsomhet", "green claims", "grønnvasking", "reach", "clp", "pfas", "eudr", "epbd", "byggevareforordning", "emballasje", "plastløftet", "merking", "digitalt produktpass", "dpp", "sporbarhet", "epd", "farlige stoffer", "biocid", "voc", "torv", "høringsnotat", "høringsfrist", "universell utforming", "tilgjengelighet", "crpd"]
 KW_NOISE = ["skriv ut", "verktøylinje", "del paragraf", "meny", "til toppen", "personvern"]
 
-# ✅ STABILE RSS-URLER (Fasit som virker)
+# ✅ STABILE RSS-URLER (ID-er som ikke endres)
 RSS_SOURCES = {
     "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
     "📜 Proposisjoner": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
@@ -39,7 +34,7 @@ RSS_SOURCES = {
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/3.0 (Strategic Compliance Tool)"
+USER_AGENT = "LovSonar/3.1 (Strategic Compliance Tool)"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -52,17 +47,14 @@ def get_http_session():
     session = requests.Session()
     retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retry))
-    session.mount("http://", HTTPAdapter(max_retries=retry)) 
     session.headers.update({"User-Agent": USER_AGENT})
     return session
 
 def unwrap_stortinget_list(obj, key_path):
     cur = obj
     for k in key_path.split('.'):
-        if isinstance(cur, dict):
-            cur = cur.get(k, {})
-        else:
-            return []
+        if isinstance(cur, dict): cur = cur.get(k, {})
+        else: return []
     if isinstance(cur, list): return cur
     if isinstance(cur, dict):
         for v in cur.values():
@@ -79,7 +71,34 @@ def clean_text(text):
     return " ".join(re.sub(r"<[^>]+>", " ", unescape(text)).split()).strip()
 
 # ===========================================
-# 3. ANALYSE-LOGIKK (MED PDF!)
+# 3. INTERN PDF-LESER (Nytt!)
+# ===========================================
+def hent_pdf_tekst_intern(url, maks_sider=10):
+    """Laster ned og leser PDF direkte i minnet uten ekstra filer."""
+    try:
+        session = get_http_session()
+        r = session.get(url, timeout=30)
+        r.raise_for_status()
+        
+        # Leser PDF fra minnet (BytesIO)
+        reader = PdfReader(BytesIO(r.content))
+        tekst = []
+        
+        for i in range(min(len(reader.pages), maks_sider)):
+            page_text = reader.pages[i].extract_text()
+            if page_text:
+                tekst.append(page_text)
+                
+        full_text = " ".join(tekst)
+        logger.info(f"📄 PDF lest OK ({len(reader.pages)} sider)")
+        return full_text
+
+    except Exception as e:
+        logger.warning(f"Kunne ikke lese PDF ({url}): {e}")
+        return ""
+
+# ===========================================
+# 4. ANALYSE-LOGIKK
 # ===========================================
 
 def analyze_item(source_name, title, description, link, pub_date, item_id):
@@ -91,20 +110,13 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
 
         full_text = f"{title} {description}"
         
-        # --- HER SKJER PDF-MAGIEN ---
-        # Sjekker om det er en PDF eller en Høring
-        if pdf_leser and (link.lower().endswith(".pdf") or "høring" in title.lower()):
-            try:
-                # Leser inntil 10 sider for å finne nøkkelord
-                tillegg = pdf_leser.hent_pdf_tekst(link, maks_sider=10)
-                if tillegg and "FEIL" not in tillegg:
-                    full_text += " " + tillegg
-                    logger.info(f"📄 Leste PDF for: {title[:30]}...")
-            except Exception as e:
-                logger.warning(f"Kunne ikke lese PDF for {title}: {e}")
-        # -----------------------------
+        # Sjekk PDF hvis relevant
+        if link.lower().endswith(".pdf") or "høring" in title.lower():
+            tillegg = hent_pdf_tekst_intern(link) # Kaller den nye interne funksjonen
+            if tillegg:
+                full_text += " " + tillegg
 
-        # AND-logikk
+        # Sjekk nøkkelord
         t = full_text.lower()
         if sum(1 for k in KW_NOISE if k in t) > 3: return 
 
@@ -125,7 +137,7 @@ def analyze_item(source_name, title, description, link, pub_date, item_id):
             conn.commit()
 
 # ===========================================
-# 4. INNSAMLING
+# 5. INNSAMLING (RSS & Stortinget)
 # ===========================================
 
 def check_rss():
@@ -182,7 +194,7 @@ def check_stortinget():
         logger.error(f"Feil mot Stortinget: {e}")
 
 # ===========================================
-# 5. DATABASE & RAPPORTERING
+# 6. DATABASE & RAPPORTERING
 # ===========================================
 
 def setup_db():
@@ -198,6 +210,7 @@ def send_weekly_report():
     email_to = os.environ.get("EMAIL_RECIPIENT", email_user).strip()
     
     if not email_user or not email_pass or not email_to:
+        logger.warning("Mangler e-postoppsett, sender ikke rapport.")
         return
 
     cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
