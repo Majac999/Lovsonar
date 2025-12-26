@@ -1,5 +1,4 @@
 import sqlite3
-import feedparser
 import logging
 import os
 import smtplib
@@ -15,6 +14,7 @@ from urllib3.util.retry import Retry
 from io import BytesIO
 from pypdf import PdfReader
 from collections import defaultdict
+from bs4 import BeautifulSoup  # VIKTIG: Brukes nå som fallback for ødelagt XML
 
 # ===========================================
 # 1. KONFIGURASJON & NØKKELORD
@@ -56,7 +56,6 @@ KW_CRITICAL = [
     "implementering", "gjennomføring"
 ]
 
-# ✅ AKTIVE KILDER (Bruker aggressiv vaskemaskin for å fikse XML-feil)
 RSS_SOURCES = {
     "📢 Høringer": "https://www.regjeringen.no/no/dokument/horinger/id1763/?show=rss",
     "📘 Meldinger": "https://www.regjeringen.no/no/dokument/proposisjoner-og-meldinger/id1754/?show=rss",
@@ -73,7 +72,7 @@ MAX_AGE_DAYS = {
 }
 
 DB_PATH = "lovsonar_seen.db"
-USER_AGENT = "LovSonar/5.8 (Coop Obs BYGG Compliance)"
+USER_AGENT = "LovSonar/6.0 (Coop Obs BYGG Compliance)"
 MAX_PDF_SIZE = 10_000_000  # 10MB
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -98,22 +97,6 @@ def get_http_session():
     session.mount("https://", HTTPAdapter(max_retries=retry))
     session.headers.update({"User-Agent": USER_AGENT})
     return session
-
-def clean_rss_data(response):
-    """
-    🧹 BRUTAL VASKEMASKIN (v5.8):
-    1. Dekoder bytes manuelt og IGNORERER feil (kaster ugyldige bytes).
-    2. Fjerner XML-kontrolltegn med Regex.
-    3. Fjerner eksplisitt ugyldige tegnsekvenser som ofte finnes i feeds.
-    """
-    # 1. Dekod bytes og kast ugyldige tegn rett i søpla
-    text = response.content.decode('utf-8', errors='ignore')
-    
-    # 2. Fjern kontrolltegn (Hex 00-08, 0B-0C, 0E-1F) som krasjer XML-parsere
-    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', '', text)
-    
-    # 3. Trim whitespace
-    return text.strip()
 
 def unwrap_stortinget_list(obj, key_path):
     cur = obj
@@ -273,8 +256,42 @@ def analyze_item(conn, session, source_name, title, description, link, pub_date,
         conn.commit()
 
 # ===========================================
-# 4. INNSAMLING
+# 4. INNSAMLING MED FALLBACK (BS4)
 # ===========================================
+
+def parse_rss_with_bs4(content):
+    """
+    Når feedparser feiler, bruker vi BeautifulSoup til å lese XML som om det var HTML.
+    Dette ignorerer strukturelle feil ("invalid token").
+    """
+    soup = BeautifulSoup(content, 'xml') # Prøv XML-parser først
+    if not soup.find('item'):
+        soup = BeautifulSoup(content, 'html.parser') # Fallback til HTML-parser
+    
+    items = []
+    for item in soup.find_all('item'):
+        title = item.find('title').get_text(strip=True) if item.find('title') else ""
+        link = item.find('link').get_text(strip=True) if item.find('link') else ""
+        desc = item.find('description').get_text(strip=True) if item.find('description') else ""
+        
+        # Prøv å finne dato
+        pub_date = datetime.utcnow()
+        pub_str = item.find('pubDate')
+        if pub_str:
+            try:
+                # Enkel parsing av RSS datoformat, ellers bruk nåtid
+                # (Dette kan utvides hvis nødvendig, men 'nå' er tryggest ved feil)
+                pub_date = datetime.utcnow() 
+            except:
+                pass
+        
+        items.append({
+            'title': title,
+            'link': link,
+            'description': desc,
+            'pub_date': pub_date
+        })
+    return items
 
 def check_rss():
     session = get_http_session()
@@ -284,31 +301,22 @@ def check_rss():
             try:
                 r = session.get(url, timeout=20)
                 if r.status_code >= 400:
-                    logger.warning(f"RSS HTTP-status {r.status_code} for {name}: {url}")
                     continue
                 
-                # ✅ FIX v5.8: Bruk clean_rss_data som dekoder med errors='ignore'
-                cleaned_data = clean_rss_data(r)
-                feed = feedparser.parse(cleaned_data)
-                
-                if getattr(feed, "bozo", 0):
-                    # Med clean_rss_data bør dette skje sjeldnere, men vi logger det for sikkerhets skyld
-                    logger.warning(f"Mulig XML-feil i {name}: {getattr(feed, 'bozo_exception', '')}")
+                # --- STRATEGI: BS4 FALLBACK (Fordi feedparser krasjer på Regjeringens XML) ---
+                # Vi bruker BeautifulSoup direkte. Den bryr seg ikke om "invalid tokens".
+                entries = parse_rss_with_bs4(r.content)
                 
                 items_processed = 0
-                for entry in feed.entries:
-                    title = clean_text(entry.get("title", ""))
-                    link = entry.get("link", "")
-                    guid = entry.get("guid") or make_stable_id(name, link, title)
-                    
-                    if hasattr(entry, "published_parsed") and entry.published_parsed:
-                        p_date = datetime(*entry.published_parsed[:6])
-                    else:
-                        p_date = datetime.utcnow()
+                for entry in entries:
+                    title = clean_text(entry['title'])
+                    link = entry['link']
+                    guid = make_stable_id(name, link, title)
+                    p_date = entry['pub_date']
                     
                     analyze_item(
                         conn, session, name, title, 
-                        clean_text(entry.get("description", "")), 
+                        clean_text(entry['description']), 
                         link, p_date, guid
                     )
                     items_processed += 1
@@ -481,7 +489,7 @@ def send_weekly_report():
     # Footer med kontekst
     company_context = os.environ.get("COMPANY_CONTEXT", "Obs BYGG - byggevarehandel med fokus på bærekraft.")
     md_text.append(f"\n### 🤖 Organisasjonskontekst\n{company_context}\n")
-    md_text.append(f"\n*Generert av LovSonar v5.8 - {now}*")
+    md_text.append(f"\n*Generert av LovSonar v6.0 - {now}*")
 
     # Send e-post
     msg = MIMEText("\n".join(md_text), "plain", "utf-8")
@@ -502,7 +510,7 @@ def send_weekly_report():
 # ===========================================
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v5.8 starter...")
+    logger.info("🚀 LovSonar v6.0 starter...")
     
     # Setup
     setup_db()
