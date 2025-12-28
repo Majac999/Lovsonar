@@ -1,42 +1,68 @@
-name: LovSonar Overvåkning
+name: LovSonar Ukentlig Overvåkning
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Kjører hver 6. time
-  workflow_dispatch:      # Knapp for manuell start
+    # Kjører hver mandag kl. 07:00 UTC (ca. kl. 08:00 norsk tid)
+    # Format: Minutt Time Dag-i-mnd Mnd Dag-i-uke (1 = Mandag)
+    - cron: '0 7 * * 1'
+  workflow_dispatch: # Lar deg starte den manuelt når du ønsker
+
+concurrency:
+  group: lovsonar-ukentlig
+  cancel-in-progress: false
 
 jobs:
   kjor_sonar:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
     permissions:
-      contents: write  # Tillater lagring av database
+      contents: write # Gir roboten lov til å lagre databasen
 
     steps:
       - name: Hent koden
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Henter hele historikken for trygg push
 
       - name: Sett opp Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # Raskere installasjon ved neste kjøring
 
       - name: Installer biblioteker
         run: |
-          pip install requests feedparser beautifulsoup4 pypdf urllib3 lxml
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --no-cache-dir \
+            requests==2.31.0 \
+            feedparser==6.0.11 \
+            beautifulsoup4==4.12.3 \
+            pypdf==4.2.0 \
+            lxml==4.9.4
 
       - name: Kjør LovSonar
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
-          LOVSONAR_MODE: daily
+          LOVSONAR_MODE: weekly # Forteller koden at den kjører ukentlig
         run: python lovsonar.py
 
-      - name: Lagre database
+      - name: Lagre database (Hukommelse)
+        if: github.ref == 'refs/heads/main'
         run: |
           git config --global user.name "LovSonar Bot"
           git config --global user.email "bot@lovsonar.no"
-          git add lovsonar_seen.db
-          # Sjekker om det er endringer før lagring
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Oppdater database [skip ci]" && git push)
+
+          # Henter nyeste status fra serveren for å unngå kollisjoner
+          git fetch origin main
+          git reset --soft origin/main
+
+          # Legger til databasefilen (og oppretter den om den mangler)
+          touch lovsonar_seen.db
+          git add lovsonar_seen.db || true
+          
+          git status --short
+          # Lagrer kun hvis det er faktiske endringer i databasen
+          git commit -m "Oppdaterte sonar-database [skip ci]" || exit 0
+          git push origin main
