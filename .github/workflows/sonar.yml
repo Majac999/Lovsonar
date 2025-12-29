@@ -1,1 +1,33 @@
+name: LovSonar Overvåkning
 
+on:
+  workflow_dispatch:  # <--- Dette aktiverer "Run workflow"-knappen du har lett etter!
+  schedule:
+    - cron: '0 5 * * 1' # Kjører automatisk hver mandag kl. 05:00
+  push:
+    branches:
+      - main          # Kjører automatisk når du lagrer endringer i koden
+
+jobs:
+  kjor_sonar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sjekk ut kode
+        uses: actions/checkout@v4
+
+      - name: Sett opp Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Installer nødvendige verktøy
+        run: |
+          pip install feedparser aiohttp pypdf
+
+      - name: Kjør LovSonar v7.1
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          LOVSONAR_MODE: daily
+        run: python lovsonar.py
