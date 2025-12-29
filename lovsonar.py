@@ -156,7 +156,7 @@ async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connect
             sessions = await r.json()
             sid = sessions.get("innevaerende_sesjon", {}).get("id", "2024-2025")
         
-        url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=100&format=json"
+       url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=500&format=json"
         async with session.get(url) as r:
             data = await r.json()
         
