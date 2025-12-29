@@ -1,54 +1,45 @@
-name: LovSonar v7.0 Flyt
+name: LovSonar Overvåkning v7.1
 
 on:
   schedule:
     # Kjører hver mandag kl. 08:00 (07:00 UTC)
     - cron: '0 7 * * 1'
-  workflow_dispatch: # Lar deg starte den manuelt med en knapp på GitHub
+  workflow_dispatch: # Lar deg starte den manuelt fra mobilen
 
 jobs:
-  run_sonar:
+  kjor_sonar:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Viktig for å lagre databasen lovsonar.db
 
     steps:
-      - name: Sjekk ut kode
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Hent koden
+        uses: actions/checkout@v4 #
 
       - name: Sett opp Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5 #
         with:
           python-version: '3.10'
           cache: 'pip'
 
-      - name: Installer nødvendige verktøy
+      - name: Installer alle nødvendige biblioteker
         run: |
           python -m pip install --upgrade pip
-          pip install feedparser beautifulsoup4 pypdf aiohttp lxml requests
+          pip install feedparser aiohttp pypdf beautifulsoup4 lxml requests
+          # Vi legger til beautifulsoup4 og lxml som manglet i forrige kjøring
 
-      - name: Steg 1: Hent nye data
+      - name: Kjør LovSonar Radar (Daglig sjekk)
         env:
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
-          LOVSONAR_MODE: daily
+          EMAIL_USER: ${{ secrets.EMAIL_USER }} #
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }} #
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }} #
+          LOVSONAR_MODE: daily #
         run: python lovsonar.py
 
-      - name: Steg 2: Send ukesrapport (HTML)
-        env:
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
-          LOVSONAR_MODE: weekly
-        run: python lovsonar.py
-
-      - name: Lagre database-endringer
+      - name: Lagre database (Hukommelse)
         run: |
           git config --global user.name "LovSonar Bot"
           git config --global user.email "bot@lovsonar.no"
-          git add lovsonar_v7.db
-          git commit -m "Oppdaterte sonar-base v7 [skip ci]" || exit 0
+          git add lovsonar.db || true
+          git commit -m "Oppdaterte radar-base [skip ci]" || exit 0
           git push
