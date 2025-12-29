@@ -1,4 +1,4 @@
-"""LovSonar v7.2 - Spesialtilpasset Obs BYGG (Deep Scan & No-Coop)"""
+"""LovSonar v7.3 - Spesialtilpasset Obs BYGG (Med bransjefilter)"""
 import sqlite3, feedparser, logging, os, smtplib, re, hashlib, asyncio, aiohttp
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
@@ -17,7 +17,7 @@ class Priority(Enum):
 class Keyword:
     term: str; weight: float = 1.0; word_boundary: bool = True
 
-# Bruker word_boundary=False for å fange opp alle bøyningsformer (f.eks. byggevarer)
+# Bransje-nøkkelord (Må matches for at frister skal gjelde)
 KEYWORDS_SEGMENT = [
     Keyword("byggevare", 2.0, False), 
     Keyword("trelast", 1.5, False), 
@@ -48,9 +48,9 @@ RSS_SOURCES = {
     "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss",
 }
 
-# Ny database-fil for å tvinge frem en fersk analyse av alle saker
-DB_PATH = "lovsonar_v7_2.db"
-USER_AGENT = "LovSonar/7.2 (Obs BYGG Strategic Intelligence)"
+# Ny database for å sikre en ren skanning med den nye logikken
+DB_PATH = "lovsonar_v7_3.db"
+USER_AGENT = "LovSonar/7.3 (Obs BYGG Strategic Intelligence)"
 MAX_PDF_SIZE = 10_000_000
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -92,12 +92,12 @@ def analyze_content(text: str, source_name: str) -> dict:
     deadline, deadline_text = extract_deadline(text)
     is_hearing = "høring" in source_name.lower()
     
-    # Terskel på 5.0 for å fange opp relevante saker i den dype skanningen
+    # OPPGRADERT LOGIKK: Krever bransje-treff (segment_score > 0) for å godta kritiske ord (som frist)
     is_relevant = (
-        (segment_score >= 1.5 and topic_score >= 2.0) or
-        critical_score >= 2.0 or
-        (is_hearing and topic_score >= 3.0) or
-        total_score >= 5.0
+        (segment_score >= 1.5 and topic_score >= 2.0) or  # Bransje + Tema
+        (segment_score > 0 and critical_score >= 2.0) or  # Bransje + Kritisk (Frist/Vedtak)
+        (is_hearing and topic_score >= 3.0) or           # Ren høring om tunge temaer
+        total_score >= 10.0                               # Svært høy totalscore
     )
     
     priority = Priority.LOW
@@ -156,9 +156,7 @@ async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connect
             sessions = await r.json()
             sid = sessions.get("innevaerende_sesjon", {}).get("id", "2024-2025")
         
-        # Henter 500 saker for en dypere skanning av inneværende sesjon
         url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=500&format=json"
-        
         async with session.get(url) as r:
             data = await r.json()
         
@@ -174,14 +172,13 @@ async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connect
             if conn.execute("SELECT 1 FROM seen_items WHERE item_id=?", (item_id,)).fetchone(): continue
             
             title, tema = sak.get("tittel", ""), sak.get("tema", "")
-            link = f"https://stortinget.no/sak/{sak_id}"
             result = analyze_content(f"{title} {tema}", "Stortinget")
             
             if result["is_relevant"]:
                 conn.execute("""INSERT INTO weekly_hits 
                     (source, title, link, excerpt, priority, deadline, deadline_text, relevance_score, matched_keywords)
                     VALUES (?,?,?,?,?,?,?,?,?)""",
-                    ("🏛️ Stortinget", title, link, f"Tema: {tema}", result["priority"].value,
+                    ("🏛️ Stortinget", title, f"https://stortinget.no/sak/{sak_id}", f"Tema: {tema}", result["priority"].value,
                      result["deadline"].isoformat() if result["deadline"] else None,
                      result["deadline_text"], result["score"], ",".join(result["matched"][:10])))
                 hits += 1
@@ -242,7 +239,7 @@ def generate_html_report(rows: list) -> str:
     .kw {{ display: inline-block; background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin: 2px; }}
     a {{ color: #1a5f7a; text-decoration: none; font-weight: bold; }}
     </style></head><body><div class="header"><h2>🛡️ LovSonar Ukesrapport</h2>
-    <p>{len(rows)} treff funnet for Obs BYGG | {now}</p></div>"""
+    <p>{len(rows)} relevante treff funnet for Obs BYGG | {now}</p></div>"""
     for row in rows:
         source, title, link, excerpt, priority, d_text, score, kw = row[1], row[2], row[3], row[4], row[5], row[7], row[8], row[9]
         dl_html = f'<span class="deadline">⏰ {d_text}</span>' if d_text else ""
@@ -275,10 +272,10 @@ async def run_radar():
         tasks = [process_rss(session, n, u, conn) for n, u in RSS_SOURCES.items()]
         tasks.append(check_stortinget(session, conn))
         await asyncio.gather(*tasks, return_exceptions=True)
-    send_report() # Sender rapporten med en gang skanningen er ferdig
+    send_report()
     conn.close()
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v7.2 starter...")
+    logger.info("🚀 LovSonar v7.3 starter...")
     asyncio.run(run_radar())
     logger.info("✅ Ferdig!")
