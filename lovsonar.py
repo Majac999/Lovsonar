@@ -1,4 +1,4 @@
-"""LovSonar v7.1 - Strategisk radar for Obs BYGG (Deep Scan Versjon)"""
+"""LovSonar v7.2 - Spesialtilpasset Obs BYGG (Deep Scan & No-Coop)"""
 import sqlite3, feedparser, logging, os, smtplib, re, hashlib, asyncio, aiohttp
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
@@ -17,23 +17,29 @@ class Priority(Enum):
 class Keyword:
     term: str; weight: float = 1.0; word_boundary: bool = True
 
+# Bruker word_boundary=False for å fange opp alle bøyningsformer (f.eks. byggevarer)
 KEYWORDS_SEGMENT = [
-    Keyword("byggevare", 2.0), Keyword("trelast", 1.5), Keyword("jernvare", 1.5),
-    Keyword("obs bygg", 2.0, False), Keyword("coop", 1.5, False), 
-    Keyword("detaljhandel", 1.0), Keyword("ombruk", 1.5), Keyword("byggforretning", 1.5)
+    Keyword("byggevare", 2.0, False), 
+    Keyword("trelast", 1.5, False), 
+    Keyword("jernvare", 1.5, False),
+    Keyword("obs bygg", 2.0, False), 
+    Keyword("detaljhandel", 1.0, False), 
+    Keyword("ombruk", 1.5, False), 
+    Keyword("byggforretning", 1.5, False)
 ]
 
 KEYWORDS_TOPIC = [
-    Keyword("byggevareforordning", 3.0), Keyword("espr", 2.5), Keyword("ppwr", 2.5),
-    Keyword("digitalt produktpass", 3.0), Keyword("dpp", 2.5), Keyword("åpenhetsloven", 2.5), 
-    Keyword("grønnvasking", 2.0), Keyword("pfas", 2.5), Keyword("reach", 2.0),
-    Keyword("tek17", 2.0), Keyword("miljøkrav", 1.5), Keyword("sirkulær", 2.0),
-    Keyword("epd", 2.0), Keyword("ce-merking", 2.0), Keyword("emballasje", 1.5)
+    Keyword("byggevareforordning", 3.0, False), Keyword("espr", 2.5, False), 
+    Keyword("ppwr", 2.5, False), Keyword("digitalt produktpass", 3.0, False), 
+    Keyword("dpp", 2.5, False), Keyword("åpenhetsloven", 2.5, False), 
+    Keyword("grønnvasking", 2.0, False), Keyword("pfas", 2.5, False), 
+    Keyword("tek17", 2.0, False), Keyword("miljøkrav", 1.5, False), 
+    Keyword("epd", 2.0, False), Keyword("emballasje", 1.5, False)
 ]
 
 KEYWORDS_CRITICAL = [
-    Keyword("høringsfrist", 3.0), Keyword("frist", 2.0), Keyword("ikrafttredelse", 2.5), 
-    Keyword("vedtak", 1.5), Keyword("trer i kraft", 2.5)
+    Keyword("høringsfrist", 3.0, False), Keyword("frist", 2.0, False), 
+    Keyword("ikrafttredelse", 2.5, False), Keyword("vedtak", 1.5, False)
 ]
 
 RSS_SOURCES = {
@@ -42,9 +48,9 @@ RSS_SOURCES = {
     "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss",
 }
 
-# Bruker ny database for å tvinge frem analyse av alle 1270 saker på nytt
-DB_PATH = "lovsonar_ny.db"
-USER_AGENT = "LovSonar/7.1 (Coop Obs BYGG Intelligence)"
+# Ny database-fil for å tvinge frem en fersk analyse av alle saker
+DB_PATH = "lovsonar_v7_2.db"
+USER_AGENT = "LovSonar/7.2 (Obs BYGG Strategic Intelligence)"
 MAX_PDF_SIZE = 10_000_000
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -86,7 +92,7 @@ def analyze_content(text: str, source_name: str) -> dict:
     deadline, deadline_text = extract_deadline(text)
     is_hearing = "høring" in source_name.lower()
     
-    # Senket terskel til 5.0 for å fange opp flere relevante saker i dagens skanning
+    # Terskel på 5.0 for å fange opp relevante saker i den dype skanningen
     is_relevant = (
         (segment_score >= 1.5 and topic_score >= 2.0) or
         critical_score >= 2.0 or
@@ -150,7 +156,7 @@ async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connect
             sessions = await r.json()
             sid = sessions.get("innevaerende_sesjon", {}).get("id", "2024-2025")
         
-        # Økt pagesize til 500 for å analysere hele arkivet
+        # Henter 500 saker for en dypere skanning av inneværende sesjon
         url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=500&format=json"
         
         async with session.get(url) as r:
@@ -236,7 +242,7 @@ def generate_html_report(rows: list) -> str:
     .kw {{ display: inline-block; background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin: 2px; }}
     a {{ color: #1a5f7a; text-decoration: none; font-weight: bold; }}
     </style></head><body><div class="header"><h2>🛡️ LovSonar Ukesrapport</h2>
-    <p>{len(rows)} treff | {now}</p></div>"""
+    <p>{len(rows)} treff funnet for Obs BYGG | {now}</p></div>"""
     for row in rows:
         source, title, link, excerpt, priority, d_text, score, kw = row[1], row[2], row[3], row[4], row[5], row[7], row[8], row[9]
         dl_html = f'<span class="deadline">⏰ {d_text}</span>' if d_text else ""
@@ -244,9 +250,9 @@ def generate_html_report(rows: list) -> str:
         html += f"""<div class="item"><div class="item-head" style="border-color: {colors.get(priority, '#ddd')};">
         <strong>{source}</strong> | {labels.get(priority, 'INFO')} | Score: {score:.1f} {dl_html}<br>
         <a href="{link}" target="_blank">{title}</a></div><div class="item-body">{excerpt[:400]}...<br>{kw_html}</div></div>"""
-    return html + f"<p style='text-align:center; font-size:12px;'>LovSonar v7.1</p></body></html>"
+    return html + "</body></html>"
 
-def send_weekly_report():
+def send_report():
     user, pw, to = os.environ.get("EMAIL_USER"), os.environ.get("EMAIL_PASS"), os.environ.get("EMAIL_RECIPIENT")
     if not all([user, pw, to]): return
     conn = sqlite3.connect(DB_PATH)
@@ -254,25 +260,25 @@ def send_weekly_report():
     conn.close()
     if not rows: return
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🛡️ LovSonar: {len(rows)} treff"
+    msg["Subject"] = f"🛡️ LovSonar: {len(rows)} relevante treff"
     msg["From"], msg["To"] = user, to
     msg.attach(MIMEText(generate_html_report(rows), "html", "utf-8"))
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(user, pw); s.send_message(msg)
-    except: pass
+        logger.info("📧 E-post sendt.")
+    except Exception as e: logger.error(f"E-postfeil: {e}")
 
-# --- 6. MAIN ---
 async def run_radar():
     conn = setup_db()
     async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
         tasks = [process_rss(session, n, u, conn) for n, u in RSS_SOURCES.items()]
         tasks.append(check_stortinget(session, conn))
         await asyncio.gather(*tasks, return_exceptions=True)
-    send_weekly_report() # Sender rapport med en gang etter skanning
+    send_report() # Sender rapporten med en gang skanningen er ferdig
     conn.close()
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v7.1 starter...")
+    logger.info("🚀 LovSonar v7.2 starter...")
     asyncio.run(run_radar())
     logger.info("✅ Ferdig!")
