@@ -41,8 +41,7 @@ RSS_SOURCES = {
     "🇪🇺 Europapolitikk": "https://www.regjeringen.no/no/tema/europapolitikk/id1160/?show=rss",
     "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss",
 }
-
-DB_PATH = "lovsonar_full_scan.db"
+DB_PATH = "lovsonar_ny.db"
 USER_AGENT = "LovSonar/7.1 (Coop Obs BYGG)"
 MAX_PDF_SIZE = 10_000_000
 
