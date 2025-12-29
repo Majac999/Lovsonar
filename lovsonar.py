@@ -1,4 +1,4 @@
-
++   1 """LovSonar v7.1 - Kompakt versjon med alle fiksene"""
 +   2 import sqlite3, feedparser, logging, os, smtplib, re, hashlib, asyncio, aiohttp
 +   3 from datetime import datetime, timedelta
 +   4 from email.mime.text import MIMEText
