@@ -1,6 +1,4 @@
-"""
-LovSonar v7.0 - Profesjonell regulatorisk radar for byggevarehandel
-"""
+
 import sqlite3, feedparser, logging, os, smtplib, re, hashlib, asyncio, aiohttp, json
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
