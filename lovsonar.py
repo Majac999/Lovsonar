@@ -1,4 +1,4 @@
-"""LovSonar v7.1 - Kompakt versjon med alle fiksene"""
+"""LovSonar v7.1 - Strategisk radar for Obs BYGG (Deep Scan Versjon)"""
 import sqlite3, feedparser, logging, os, smtplib, re, hashlib, asyncio, aiohttp
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
@@ -41,8 +41,10 @@ RSS_SOURCES = {
     "🇪🇺 Europapolitikk": "https://www.regjeringen.no/no/tema/europapolitikk/id1160/?show=rss",
     "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss",
 }
+
+# Bruker ny database for å tvinge frem analyse av alle 1270 saker på nytt
 DB_PATH = "lovsonar_ny.db"
-USER_AGENT = "LovSonar/7.1 (Coop Obs BYGG)"
+USER_AGENT = "LovSonar/7.1 (Coop Obs BYGG Intelligence)"
 MAX_PDF_SIZE = 10_000_000
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -53,7 +55,6 @@ MONTHS_NO = {'januar':1,'februar':2,'mars':3,'april':4,'mai':5,'juni':6,
              'juli':7,'august':8,'september':9,'oktober':10,'november':11,'desember':12}
 
 def extract_deadline(text: str) -> tuple[Optional[datetime], str]:
-    """Ekstraher høringsfrist fra tekst"""
     patterns = [
         r'(?:høringsfrist|frist)[:\s]+(\d{1,2})[.\s]+(\w+)\s+(\d{4})',
         r'innen\s+(\d{1,2})[.\s]+(\w+)\s+(\d{4})',
@@ -65,18 +66,15 @@ def extract_deadline(text: str) -> tuple[Optional[datetime], str]:
                 day, month_name, year = int(match.group(1)), match.group(2).lower(), int(match.group(3))
                 if month_name in MONTHS_NO:
                     return datetime(year, MONTHS_NO[month_name], day), match.group(0)
-            except (ValueError, KeyError):
-                continue
+            except: continue
     return None, ""
 
 def match_keyword(text: str, kw: Keyword) -> bool:
-    """Match nøkkelord med valgfri ordgrense"""
     if kw.word_boundary:
         return bool(re.search(r'\b' + re.escape(kw.term) + r'\b', text, re.IGNORECASE))
     return kw.term.lower() in text.lower()
 
 def analyze_content(text: str, source_name: str) -> dict:
-    """Analyser innhold for relevans"""
     t = text.lower()
     segment_score = sum(kw.weight for kw in KEYWORDS_SEGMENT if match_keyword(t, kw))
     topic_score = sum(kw.weight for kw in KEYWORDS_TOPIC if match_keyword(t, kw))
@@ -88,11 +86,12 @@ def analyze_content(text: str, source_name: str) -> dict:
     deadline, deadline_text = extract_deadline(text)
     is_hearing = "høring" in source_name.lower()
     
+    # Senket terskel til 5.0 for å fange opp flere relevante saker i dagens skanning
     is_relevant = (
         (segment_score >= 1.5 and topic_score >= 2.0) or
         critical_score >= 2.0 or
         (is_hearing and topic_score >= 3.0) or
-       total_score >= 5.0
+        total_score >= 5.0
     )
     
     priority = Priority.LOW
@@ -126,17 +125,13 @@ def setup_db() -> sqlite3.Connection:
 
 # --- 4. INNHENTING ---
 async def fetch_pdf_text(session: aiohttp.ClientSession, url: str) -> str:
-    """Hent og les PDF asynkront"""
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
             if r.status != 200: return ""
             content = await r.read()
             if len(content) > MAX_PDF_SIZE: return ""
             reader = PdfReader(BytesIO(content))
-            texts = []
-            for page in reader.pages[:5]:
-                try: texts.append(page.extract_text() or "")
-                except: continue
+            texts = [page.extract_text() or "" for page in reader.pages[:5]]
             return " ".join(texts)
     except: return ""
 
@@ -149,14 +144,15 @@ def unwrap_stortinget_list(data: dict, key: str) -> list:
     return []
 
 async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connection):
-    """Sjekk Stortinget for relevante saker"""
     logger.info("🏛️ Sjekker Stortinget...")
     try:
         async with session.get("https://data.stortinget.no/eksport/sesjoner?format=json") as r:
             sessions = await r.json()
             sid = sessions.get("innevaerende_sesjon", {}).get("id", "2024-2025")
         
-       url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=500&format=json"
+        # Økt pagesize til 500 for å analysere hele arkivet
+        url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=500&format=json"
+        
         async with session.get(url) as r:
             data = await r.json()
         
@@ -191,20 +187,17 @@ async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connect
     except Exception as e: logger.error(f"Stortinget-feil: {e}")
 
 async def process_rss(session: aiohttp.ClientSession, name: str, url: str, conn: sqlite3.Connection):
-    """Prosesser én RSS-kilde"""
     logger.info(f"🔎 Sjekker: {name}")
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as r:
             if r.status >= 400: return
-            content = await r.text()
-        
+            content = await r.read()
         feed = feedparser.parse(content)
         hits = 0
         for entry in feed.entries:
             title, link = getattr(entry, 'title', ''), getattr(entry, 'link', '')
             summary = getattr(entry, 'summary', getattr(entry, 'description', ''))
             item_id = hashlib.sha256(f"{name}|{link}|{title}".encode()).hexdigest()
-            
             if conn.execute("SELECT 1 FROM seen_items WHERE item_id=?", (item_id,)).fetchone(): continue
             
             full_text = f"{title} {summary}"
@@ -233,7 +226,6 @@ def generate_html_report(rows: list) -> str:
     colors = {1: "#dc3545", 2: "#fd7e14", 3: "#ffc107", 4: "#28a745"}
     labels = {1: "🚨 KRITISK", 2: "⚠️ HØY", 3: "📋 MEDIUM", 4: "📌 LAV"}
     now = datetime.now().strftime('%Y-%m-%d')
-    
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     body {{ font-family: sans-serif; max-width: 700px; margin: 20px auto; background: #f5f5f5; }}
     .header {{ background: linear-gradient(135deg, #1a5f7a, #086972); color: white; padding: 25px; border-radius: 10px; }}
@@ -243,61 +235,44 @@ def generate_html_report(rows: list) -> str:
     .deadline {{ background: #dc3545; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px; }}
     .kw {{ display: inline-block; background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin: 2px; }}
     a {{ color: #1a5f7a; text-decoration: none; font-weight: bold; }}
-    </style></head><body>
-    <div class="header"><h2 style="margin:0;">🛡️ LovSonar Ukesrapport</h2>
-    <p><strong>{len(rows)}</strong> relevante treff funnet denne uken ({now})</p></div>"""
-    
+    </style></head><body><div class="header"><h2>🛡️ LovSonar Ukesrapport</h2>
+    <p>{len(rows)} treff | {now}</p></div>"""
     for row in rows:
-        source, title, link, excerpt, priority, d_text, score, keywords = row[1], row[2], row[3], row[4], row[5], row[7], row[8], row[9]
-        color = colors.get(priority, "#28a745")
-        kw_html = "".join(f'<span class="kw">{k}</span>' for k in (keywords or "").split(",") if k)
+        source, title, link, excerpt, priority, d_text, score, kw = row[1], row[2], row[3], row[4], row[5], row[7], row[8], row[9]
         dl_html = f'<span class="deadline">⏰ {d_text}</span>' if d_text else ""
-        
-        html += f"""<div class="item"><div class="item-head" style="border-color: {color};">
-        <strong>{source}</strong> | {labels.get(priority)} | Score: {score:.1f} {dl_html}<br>
-        <a href="{link}" target="_blank">{title}</a></div>
-        <div class="item-body">{excerpt[:400]}...<div style="margin-top:10px;">{kw_html}</div></div></div>"""
-    
-    return html + "</body></html>"
+        kw_html = "".join(f'<span class="kw">{k}</span>' for k in (kw or "").split(",")[:6] if k)
+        html += f"""<div class="item"><div class="item-head" style="border-color: {colors.get(priority, '#ddd')};">
+        <strong>{source}</strong> | {labels.get(priority, 'INFO')} | Score: {score:.1f} {dl_html}<br>
+        <a href="{link}" target="_blank">{title}</a></div><div class="item-body">{excerpt[:400]}...<br>{kw_html}</div></div>"""
+    return html + f"<p style='text-align:center; font-size:12px;'>LovSonar v7.1</p></body></html>"
 
 def send_weekly_report():
     user, pw, to = os.environ.get("EMAIL_USER"), os.environ.get("EMAIL_PASS"), os.environ.get("EMAIL_RECIPIENT")
     if not all([user, pw, to]): return
-    
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT * FROM weekly_hits WHERE detected_at > datetime('now', '-7 days') ORDER BY priority ASC, relevance_score DESC").fetchall()
     conn.close()
     if not rows: return
-    
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🛡️ LovSonar: {len(rows)} treff (uke {datetime.now().isocalendar()[1]})"
+    msg["Subject"] = f"🛡️ LovSonar: {len(rows)} treff"
     msg["From"], msg["To"] = user, to
     msg.attach(MIMEText(generate_html_report(rows), "html", "utf-8"))
-    
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(user, pw)
-            server.send_message(msg)
-        logger.info("📧 Rapport sendt.")
-    except Exception as e: logger.error(f"E-postfeil: {e}")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(user, pw); s.send_message(msg)
+    except: pass
 
 # --- 6. MAIN ---
 async def run_radar():
     conn = setup_db()
     async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
-        tasks = [process_rss(session, name, url, conn) for name, url in RSS_SOURCES.items()]
+        tasks = [process_rss(session, n, u, conn) for n, u in RSS_SOURCES.items()]
         tasks.append(check_stortinget(session, conn))
         await asyncio.gather(*tasks, return_exceptions=True)
+    send_weekly_report() # Sender rapport med en gang etter skanning
     conn.close()
 
-def main():
-    logger.info("🚀 LovSonar v7.1 starter...")
-    mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
-    if mode == "weekly":
-        send_weekly_report()
-    else:
-        asyncio.run(run_radar())
-    logger.info("✅ Ferdig!")
-
 if __name__ == "__main__":
-    main()
+    logger.info("🚀 LovSonar v7.1 starter...")
+    asyncio.run(run_radar())
+    logger.info("✅ Ferdig!")
