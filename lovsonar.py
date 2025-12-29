@@ -92,7 +92,7 @@ def analyze_content(text: str, source_name: str) -> dict:
         (segment_score >= 1.5 and topic_score >= 2.0) or
         critical_score >= 2.0 or
         (is_hearing and topic_score >= 3.0) or
-        total_score >= 8.0
+       total_score >= 5.0
     )
     
     priority = Priority.LOW
