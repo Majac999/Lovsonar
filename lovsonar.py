@@ -1,4 +1,4 @@
-"""LovSonar v7.4 - Spesialtilpasset Obs BYGG (Fikset Stortinget-lenke)"""
+"""LovSonar v7.1 - Anonymisert versjon"""
 import sqlite3, feedparser, logging, os, smtplib, re, hashlib, asyncio, aiohttp
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
@@ -17,28 +17,24 @@ class Priority(Enum):
 class Keyword:
     term: str; weight: float = 1.0; word_boundary: bool = True
 
+# Nøytrale bransjenøkkelord
 KEYWORDS_SEGMENT = [
-    Keyword("byggevare", 2.0, False), 
-    Keyword("trelast", 1.5, False), 
-    Keyword("jernvare", 1.5, False),
-    Keyword("obs bygg", 2.0, False), 
-    Keyword("detaljhandel", 1.0, False), 
-    Keyword("ombruk", 1.5, False), 
-    Keyword("byggforretning", 1.5, False)
+    Keyword("byggevare", 2.0), Keyword("trelast", 1.5), Keyword("jernvare", 1.5),
+    Keyword("detaljhandel", 1.5), Keyword("varehandel", 1.5), 
+    Keyword("faghandel", 1.0), Keyword("ombruk", 1.5), Keyword("byggforretning", 1.5)
 ]
 
 KEYWORDS_TOPIC = [
-    Keyword("byggevareforordning", 3.0, False), Keyword("espr", 2.5, False), 
-    Keyword("ppwr", 2.5, False), Keyword("digitalt produktpass", 3.0, False), 
-    Keyword("dpp", 2.5, False), Keyword("åpenhetsloven", 2.5, False), 
-    Keyword("grønnvasking", 2.0, False), Keyword("pfas", 2.5, False), 
-    Keyword("tek17", 2.0, False), Keyword("miljøkrav", 1.5, False), 
-    Keyword("epd", 2.0, False), Keyword("emballasje", 1.5, False)
+    Keyword("byggevareforordning", 3.0), Keyword("espr", 2.5), Keyword("ppwr", 2.5),
+    Keyword("digitalt produktpass", 3.0), Keyword("dpp", 2.5), Keyword("åpenhetsloven", 2.5), 
+    Keyword("grønnvasking", 2.0), Keyword("pfas", 2.5), Keyword("reach", 2.0),
+    Keyword("tek17", 2.0), Keyword("miljøkrav", 1.5), Keyword("sirkulær", 2.0),
+    Keyword("epd", 2.0), Keyword("ce-merking", 2.0), Keyword("emballasje", 1.5)
 ]
 
 KEYWORDS_CRITICAL = [
-    Keyword("høringsfrist", 3.0, False), Keyword("frist", 2.0, False), 
-    Keyword("ikrafttredelse", 2.5, False), Keyword("vedtak", 1.5, False)
+    Keyword("høringsfrist", 3.0), Keyword("frist", 2.0), Keyword("ikrafttredelse", 2.5), 
+    Keyword("vedtak", 1.5), Keyword("trer i kraft", 2.5)
 ]
 
 RSS_SOURCES = {
@@ -47,9 +43,9 @@ RSS_SOURCES = {
     "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss",
 }
 
-# Ny database for v7.4 for å teste de nye lenkene
-DB_PATH = "lovsonar_v7_4.db"
-USER_AGENT = "LovSonar/7.4 (Obs BYGG Strategic Intelligence)"
+DB_PATH = "lovsonar.db"
+# Nøytral identifikasjon overfor eksterne servere
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LovSonar/7.1"
 MAX_PDF_SIZE = 10_000_000
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -71,7 +67,8 @@ def extract_deadline(text: str) -> tuple[Optional[datetime], str]:
                 day, month_name, year = int(match.group(1)), match.group(2).lower(), int(match.group(3))
                 if month_name in MONTHS_NO:
                     return datetime(year, MONTHS_NO[month_name], day), match.group(0)
-            except: continue
+            except (ValueError, KeyError):
+                continue
     return None, ""
 
 def match_keyword(text: str, kw: Keyword) -> bool:
@@ -93,9 +90,9 @@ def analyze_content(text: str, source_name: str) -> dict:
     
     is_relevant = (
         (segment_score >= 1.5 and topic_score >= 2.0) or
-        (segment_score > 0 and critical_score >= 2.0) or
+        critical_score >= 2.0 or
         (is_hearing and topic_score >= 3.0) or
-        total_score >= 10.0
+        total_score >= 8.0
     )
     
     priority = Priority.LOW
@@ -154,7 +151,7 @@ async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connect
             sessions = await r.json()
             sid = sessions.get("innevaerende_sesjon", {}).get("id", "2024-2025")
         
-        url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=500&format=json"
+        url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=100&format=json"
         async with session.get(url) as r:
             data = await r.json()
         
@@ -169,11 +166,7 @@ async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connect
             item_id = f"ST-{sak_id}"
             if conn.execute("SELECT 1 FROM seen_items WHERE item_id=?", (item_id,)).fetchone(): continue
             
-            title, tema = sak.get("tittel", ""), sak.get("tema", "")
-            
-            # OPPDATERT LENKE-FORMAT FOR STORTINGET:
-            link = f"https://www.stortinget.no/no/Saker-og-publikasjoner/Saker/Sak/?p={sak_id}"
-            
+            title = sak.get("tittel", ""); tema = sak.get("tema", ""); link = f"https://stortinget.no/sak/{sak_id}"
             result = analyze_content(f"{title} {tema}", "Stortinget")
             
             if result["is_relevant"]:
@@ -188,7 +181,6 @@ async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connect
             conn.execute("INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?,?,?,?)",
                         (item_id, "Stortinget", title, datetime.now().isoformat()))
         conn.commit()
-        logger.info(f"  ✓ {hits} relevante saker fra Stortinget")
     except Exception as e: logger.error(f"Stortinget-feil: {e}")
 
 async def process_rss(session: aiohttp.ClientSession, name: str, url: str, conn: sqlite3.Connection):
@@ -200,7 +192,7 @@ async def process_rss(session: aiohttp.ClientSession, name: str, url: str, conn:
         feed = feedparser.parse(content)
         hits = 0
         for entry in feed.entries:
-            title, link = getattr(entry, 'title', ''), getattr(entry, 'link', '')
+            title = getattr(entry, 'title', ''); link = getattr(entry, 'link', '')
             summary = getattr(entry, 'summary', getattr(entry, 'description', ''))
             item_id = hashlib.sha256(f"{name}|{link}|{title}".encode()).hexdigest()
             if conn.execute("SELECT 1 FROM seen_items WHERE item_id=?", (item_id,)).fetchone(): continue
@@ -223,7 +215,6 @@ async def process_rss(session: aiohttp.ClientSession, name: str, url: str, conn:
             conn.execute("INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?,?,?,?)",
                         (item_id, name, title, datetime.now().isoformat()))
         conn.commit()
-        logger.info(f"  ✓ {hits} relevante fra {name}")
     except Exception as e: logger.error(f"RSS-feil {name}: {e}")
 
 # --- 5. RAPPORT ---
@@ -240,8 +231,8 @@ def generate_html_report(rows: list) -> str:
     .deadline {{ background: #dc3545; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px; }}
     .kw {{ display: inline-block; background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin: 2px; }}
     a {{ color: #1a5f7a; text-decoration: none; font-weight: bold; }}
-    </style></head><body><div class="header"><h2>🛡️ LovSonar Ukesrapport</h2>
-    <p>{len(rows)} relevante treff funnet for Obs BYGG | {now}</p></div>"""
+    </style></head><body><div class="header"><h2>🛡️ LovSonar: Regulatorisk Radar</h2>
+    <p>{len(rows)} treff identifisert | {now}</p></div>"""
     for row in rows:
         source, title, link, excerpt, priority, d_text, score, kw = row[1], row[2], row[3], row[4], row[5], row[7], row[8], row[9]
         dl_html = f'<span class="deadline">⏰ {d_text}</span>' if d_text else ""
@@ -249,9 +240,9 @@ def generate_html_report(rows: list) -> str:
         html += f"""<div class="item"><div class="item-head" style="border-color: {colors.get(priority, '#ddd')};">
         <strong>{source}</strong> | {labels.get(priority, 'INFO')} | Score: {score:.1f} {dl_html}<br>
         <a href="{link}" target="_blank">{title}</a></div><div class="item-body">{excerpt[:400]}...<br>{kw_html}</div></div>"""
-    return html + "</body></html>"
+    return html + f"<p style='text-align:center; font-size:12px;'>LovSonar v7.1 - Strategisk Overvåkning</p></body></html>"
 
-def send_report():
+def send_weekly_report():
     user, pw, to = os.environ.get("EMAIL_USER"), os.environ.get("EMAIL_PASS"), os.environ.get("EMAIL_RECIPIENT")
     if not all([user, pw, to]): return
     conn = sqlite3.connect(DB_PATH)
@@ -259,25 +250,29 @@ def send_report():
     conn.close()
     if not rows: return
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🛡️ LovSonar: {len(rows)} relevante treff"
+    msg["Subject"] = f"🛡️ LovSonar: {len(rows)} treff (uke {datetime.now().isocalendar()[1]})"
     msg["From"], msg["To"] = user, to
     msg.attach(MIMEText(generate_html_report(rows), "html", "utf-8"))
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(user, pw); s.send_message(msg)
-        logger.info("📧 E-post sendt.")
-    except Exception as e: logger.error(f"E-postfeil: {e}")
+        logger.info(f"📧 Rapport sendt")
+    except Exception as e: logger.error(f"E-postfeil")
 
+# --- 6. MAIN ---
 async def run_radar():
     conn = setup_db()
     async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
         tasks = [process_rss(session, n, u, conn) for n, u in RSS_SOURCES.items()]
         tasks.append(check_stortinget(session, conn))
-        await asyncio.gather(*tasks, return_exceptions=True)
-    send_report()
+        await asyncio.gather(*tasks)
     conn.close()
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v7.4 starter...")
-    asyncio.run(run_radar())
+    logger.info("🚀 LovSonar v7.1 starter...")
+    mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
+    if mode == "weekly":
+        send_weekly_report()
+    else:
+        asyncio.run(run_radar())
     logger.info("✅ Ferdig!")
