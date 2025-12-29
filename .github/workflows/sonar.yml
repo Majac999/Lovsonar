@@ -1,33 +1,45 @@
-name: LovSonar Overvåkning
+name: LovSonar Overvåkning v7.1
 
 on:
-  workflow_dispatch:  # <--- Dette aktiverer "Run workflow"-knappen du har lett etter!
   schedule:
-    - cron: '0 5 * * 1' # Kjører automatisk hver mandag kl. 05:00
-  push:
-    branches:
-      - main          # Kjører automatisk når du lagrer endringer i koden
+    # Kjører hver mandag kl. 08:00 (07:00 UTC)
+    - cron: '0 7 * * 1'
+  workflow_dispatch: # Lar deg starte den manuelt fra mobilen
 
 jobs:
   kjor_sonar:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Viktig for å lagre databasen lovsonar.db
+
     steps:
-      - name: Sjekk ut kode
-        uses: actions/checkout@v4
+      - name: Hent koden
+        uses: actions/checkout@v4 #
 
       - name: Sett opp Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5 #
         with:
           python-version: '3.10'
+          cache: 'pip'
 
-      - name: Installer nødvendige verktøy
+      - name: Installer alle nødvendige biblioteker
         run: |
-          pip install feedparser aiohttp pypdf
+          python -m pip install --upgrade pip
+          pip install feedparser aiohttp pypdf beautifulsoup4 lxml requests
+          # Vi legger til beautifulsoup4 og lxml som manglet i forrige kjøring
 
-      - name: Kjør LovSonar v7.1
+      - name: Kjør LovSonar Radar (Daglig sjekk)
         env:
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
-          LOVSONAR_MODE: daily
+          EMAIL_USER: ${{ secrets.EMAIL_USER }} #
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }} #
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }} #
+          LOVSONAR_MODE: daily #
         run: python lovsonar.py
+
+      - name: Lagre database (Hukommelse)
+        run: |
+          git config --global user.name "LovSonar Bot"
+          git config --global user.email "bot@lovsonar.no"
+          git add lovsonar.db || true
+          git commit -m "Oppdaterte radar-base [skip ci]" || exit 0
+          git push
