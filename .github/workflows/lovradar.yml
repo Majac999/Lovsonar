@@ -1,32 +1,45 @@
-name: LovRadar v12 Ultimate # Dette navnet vises i GitHub-menyen
+name: LovRadar v13.0 Ultimate # Oppdatert navn for det nye systemet
 
 on:
   schedule:
-    - cron: '0 7 * * 1'
-  workflow_dispatch:
+    # Kjører hver morgen kl. 08:00 (07:00 UTC) for å fange opp nye høringer raskt
+    - cron: '0 7 * * *'
+  workflow_dispatch: # Lar deg starte den manuelt fra mobilen
 
 jobs:
-  kjor_radar:
+  run_compliance_system:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # KRITISK: Gir roboten lov til å lagre databasen (.db)
 
     steps:
-      - name: Hent koden
+      - name: 1. Hent koden
         uses: actions/checkout@v4
 
-      - name: Sett opp Python
+      - name: 2. Sett opp Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11' # Bruker nyeste stabile Python for v13
 
-      - name: Installer verktøy
+      - name: 3. Installer verktøykasse for v13
         run: |
-          pip install requests beautifulsoup4 lxml feedparser pypdf aiohttp
+          python -m pip install --upgrade pip
+          # Vi legger til feedparser og pypdf for Sonar-funksjonalitet
+          pip install aiohttp feedparser beautifulsoup4 pypdf lxml
 
-      - name: Kjør Radaren
+      - name: 4. Kjør LovRadar Analyse
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
-        run: python lovradar.py # VIKTIG: Dette må være navnet på .py-filen din!
+        run: python lovradar.py
+
+      - name: 5. Lagre Historikk (Database & Cache)
+        # Dette steget gjør at v13 husker tidligere funn og bygger historikk
+        run: |
+          git config --global user.name "LovRadar Bot"
+          git config --global user.email "bot@lovradar.no"
+          # Vi lagrer både databasen og cache-filen
+          git add lovradar_v13.db lovradar_v13_cache.json || true
+          git commit -m "Oppdaterte regulatorisk database [skip ci]" || exit 0
+          git push
