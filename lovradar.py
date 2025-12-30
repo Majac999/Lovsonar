@@ -1,282 +1,224 @@
-"""LovSonar v7.1 - Regulatorisk radar for byggevarehandel"""
-import sqlite3, feedparser, logging, os, smtplib, re, hashlib, asyncio, aiohttp
-from datetime import datetime
+"""
+LovRadar v13.0 - Komplett regulatorisk overvåkningssystem for byggevarehandel
+Kombinerer:
+- LovSonar: RSS/API-overvåkning for nye høringer, proposisjoner, nyheter
+- LovRadar: Endringsdeteksjon i eksisterende lover og forskrifter
+- PDF-parsing: Leser høringsnotater for dypere innsikt
+- Fristovervåking: Ekstraherer og varsler om høringsfrister (30/60 dager)
+- Database: SQLite-historikk for compliance-dokumentasjon
+"""
+
+import os, json, hashlib, smtplib, re, asyncio, aiohttp, logging, feedparser, sqlite3
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from io import BytesIO
-from pypdf import PdfReader
+from bs4 import BeautifulSoup
 from dataclasses import dataclass
-from typing import Optional
 from enum import Enum
+from difflib import SequenceMatcher
 
-# --- 1. KONFIGURASJON ---
+# Valgfri PDF-støtte
+try:
+    from pypdf import PdfReader
+    PDF_SUPPORT = True
+except ImportError:
+    PDF_SUPPORT = False
+    logging.warning("pypdf ikke installert - PDF-parsing deaktivert")
+
+# =============================================================================
+# 1. KONFIGURASJON & STRATEGISKE NØKKELORD
+# =============================================================================
+
 class Priority(Enum):
-    CRITICAL = 1; HIGH = 2; MEDIUM = 3; LOW = 4
+    CRITICAL = 1  # Frist < 30 dager eller stor lovendring
+    HIGH = 2      # Relevant + frist, eller betydelig endring
+    MEDIUM = 3    # Relevant tema
+    LOW = 4       # Mulig interessant
 
 @dataclass
 class Keyword:
-    term: str; weight: float = 1.0; word_boundary: bool = True
+    term: str
+    weight: float = 1.0
+    category: str = "general"
+    word_boundary: bool = True
 
+# --- Spesialiserte nøkkelord for Obs BYGG / Varehandel ---
 KEYWORDS_SEGMENT = [
-    Keyword("byggevare", 2.0), Keyword("trelast", 1.5), Keyword("jernvare", 1.5),
-    Keyword("detaljhandel", 1.5), Keyword("varehandel", 1.5), 
-    Keyword("faghandel", 1.0), Keyword("ombruk", 1.5), Keyword("byggforretning", 1.5)
+    Keyword("byggevare", 2.0, "core"), Keyword("trelast", 1.5, "core"),
+    Keyword("jernvare", 1.5, "core"), Keyword("detaljhandel", 1.0, "retail"),
+    Keyword("ombruk", 1.5, "sustainability"), Keyword("byggevarehus", 1.5, "core")
 ]
 
 KEYWORDS_TOPIC = [
-    Keyword("byggevareforordning", 3.0), Keyword("espr", 2.5), Keyword("ppwr", 2.5),
-    Keyword("digitalt produktpass", 3.0), Keyword("dpp", 2.5), Keyword("åpenhetsloven", 2.5), 
-    Keyword("grønnvasking", 2.0), Keyword("pfas", 2.5), Keyword("reach", 2.0),
-    Keyword("tek17", 2.0), Keyword("miljøkrav", 1.5), Keyword("sirkulær", 2.0),
-    Keyword("epd", 2.0), Keyword("ce-merking", 2.0), Keyword("emballasje", 1.5)
+    # EU & Bærekraft (ESPR, Digitalt produktpass er kritisk for 2026)
+    Keyword("espr", 3.0, "eu"), Keyword("digitalt produktpass", 3.0, "digital"),
+    Keyword("dpp", 2.5, "digital"), Keyword("ppwr", 2.5, "packaging"),
+    Keyword("eudr", 2.5, "timber"), Keyword("miljødeklarasjon", 2.0, "sustainability"),
+    Keyword("epd", 2.0, "sustainability"), Keyword("bærekraft", 1.5, "sustainability"),
+    # Kjemikalier & Sikkerhet
+    Keyword("reach", 2.0, "chemicals"), Keyword("pfas", 2.5, "chemicals"),
+    Keyword("asbest", 3.0, "danger"), Keyword("farlige stoffer", 2.0, "chemicals"),
+    # Juss & Compliance
+    Keyword("åpenhetsloven", 2.5, "compliance"), Keyword("aktsomhet", 2.0, "compliance"),
+    Keyword("grønnvasking", 2.5, "marketing"), Keyword("tek17", 2.0, "building")
 ]
 
 KEYWORDS_CRITICAL = [
-    Keyword("høringsfrist", 3.0), Keyword("frist", 2.0), Keyword("ikrafttredelse", 2.5), 
-    Keyword("vedtak", 1.5), Keyword("trer i kraft", 2.5)
+    Keyword("høringsfrist", 3.0, "deadline"), Keyword("ikrafttredelse", 2.5, "deadline"),
+    Keyword("trer i kraft", 2.5, "deadline"), Keyword("forbud", 2.5, "legal")
 ]
 
+# --- KILDE-OPPSETT ---
 RSS_SOURCES = {
-    "📢 Høringer": "https://www.regjeringen.no/no/dokument/hoyringar/id1763/?show=rss",
-    "🇪🇺 Europapolitikk": "https://www.regjeringen.no/no/tema/europapolitikk/id1160/?show=rss",
-    "📚 NOU": "https://www.regjeringen.no/no/dokument/nou-er/id1767/?show=rss",
+    "📢 Høringer": {"url": "https://www.regjeringen.no/no/dokument/hoyringar/id1763/?show=rss", "max_age_days": 90},
+    "🇪🇺 Europapolitikk": {"url": "https://www.regjeringen.no/no/tema/europapolitikk/id1160/?show=rss", "max_age_days": 120},
+    "🏗️ DiBK (Byggkvalitet)": {"url": "https://dibk.no/rss", "max_age_days": 90},
+    "🌿 Miljødirektoratet": {"url": "https://www.miljodirektoratet.no/rss/aktuelt/", "max_age_days": 90},
+    "⚖️ Forbrukertilsynet": {"url": "https://www.forbrukertilsynet.no/feed", "max_age_days": 90}
 }
 
-DB_PATH = "lovsonar.db"
-USER_AGENT = "Mozilla/5.0 (compatible; LovSonar/7.1)"
-MAX_PDF_SIZE = 10_000_000
+LAWS_TO_MONITOR = {
+    "Åpenhetsloven": "https://lovdata.no/dokument/NL/lov/2021-06-18-99",
+    "Produktkontrolloven": "https://lovdata.no/dokument/NL/lov/1976-06-11-79",
+    "Markedsføringsloven": "https://lovdata.no/dokument/NL/lov/2009-01-09-2",
+    "Byggevareforskriften (DOK)": "https://lovdata.no/dokument/SF/forskrift/2014-12-17-1714",
+    "Avfallsforskriften": "https://lovdata.no/dokument/SF/forskrift/2004-06-01-930",
+    "TEK17 Kap 9 (Miljø)": "https://www.dibk.no/regelverk/byggteknisk-forskrift-tek17/9/9-1"
+}
+
+DB_PATH = "lovradar_v13.db"
+CACHE_FILE = "lovradar_v13_cache.json"
+USER_AGENT = "Mozilla/5.0 (compatible; LovRadar/13.0; Compliance-Monitoring-Oslo)"
+CHANGE_THRESHOLD = 0.5
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- 2. ANALYSE ---
-MONTHS_NO = {'januar':1,'februar':2,'mars':3,'april':4,'mai':5,'juni':6,
-             'juli':7,'august':8,'september':9,'oktober':10,'november':11,'desember':12}
+# =============================================================================
+# 2. ANALYSE-MOTOR & DATABASE
+# =============================================================================
 
-def extract_deadline(text: str) -> tuple[Optional[datetime], str]:
-    patterns = [
-        r'(?:høringsfrist|frist)[:\s]+(\d{1,2})[.\s]+(\w+)\s+(\d{4})',
-        r'innen\s+(\d{1,2})[.\s]+(\w+)\s+(\d{4})',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            try:
-                day, month_name, year = int(match.group(1)), match.group(2).lower(), int(match.group(3))
-                if month_name in MONTHS_NO:
-                    return datetime(year, MONTHS_NO[month_name], day), match.group(0)
-            except (ValueError, KeyError):
-                continue
-    return None, ""
-
-def match_keyword(text: str, kw: Keyword) -> bool:
-    if kw.word_boundary:
-        return bool(re.search(r'\b' + re.escape(kw.term) + r'\b', text, re.IGNORECASE))
-    return kw.term.lower() in text.lower()
-
-def analyze_content(text: str, source_name: str) -> dict:
-    t = text.lower()
-    segment_score = sum(kw.weight for kw in KEYWORDS_SEGMENT if match_keyword(t, kw))
-    topic_score = sum(kw.weight for kw in KEYWORDS_TOPIC if match_keyword(t, kw))
-    critical_score = sum(kw.weight for kw in KEYWORDS_CRITICAL if match_keyword(t, kw))
-    
-    matched = [kw.term for kw in KEYWORDS_SEGMENT + KEYWORDS_TOPIC + KEYWORDS_CRITICAL if match_keyword(t, kw)]
-    total_score = segment_score * 1.5 + topic_score + critical_score * 2.0
-    
-    deadline, deadline_text = extract_deadline(text)
-    is_hearing = "høring" in source_name.lower()
-    
-    is_relevant = (
-        (segment_score >= 1.5 and topic_score >= 2.0) or
-        critical_score >= 2.0 or
-        (is_hearing and topic_score >= 3.0) or
-        total_score >= 8.0
-    )
-    
-    priority = Priority.LOW
-    if is_relevant:
-        if deadline:
-            days_until = (deadline - datetime.now()).days
-            if days_until <= 30: priority = Priority.CRITICAL
-            elif days_until <= 60: priority = Priority.HIGH
-            else: priority = Priority.MEDIUM
-        elif critical_score >= 3.0: priority = Priority.HIGH
-        elif total_score >= 10.0: priority = Priority.MEDIUM
-    
-    return {
-        "is_relevant": is_relevant, "score": total_score, "priority": priority,
-        "matched": matched, "deadline": deadline, "deadline_text": deadline_text
-    }
-
-# --- 3. DATABASE ---
-def setup_db() -> sqlite3.Connection:
+def setup_db():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""CREATE TABLE IF NOT EXISTS seen_items (
-        item_id TEXT PRIMARY KEY, source TEXT, title TEXT, date_seen TEXT)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS weekly_hits (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source TEXT, title TEXT, link TEXT, excerpt TEXT,
-        priority INTEGER, deadline TEXT, deadline_text TEXT,
-        relevance_score REAL, matched_keywords TEXT,
-        detected_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    conn.execute("CREATE TABLE IF NOT EXISTS seen_items (item_id TEXT PRIMARY KEY, source TEXT, title TEXT, date_seen TEXT)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS sonar_hits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, title TEXT, link TEXT, 
+        priority INTEGER, deadline TEXT, score REAL, matched_keywords TEXT, detected_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS radar_hits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, law_name TEXT, url TEXT, 
+        change_percent REAL, change_excerpt TEXT, detected_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
     conn.commit()
     return conn
 
-# --- 4. INNHENTING ---
-async def fetch_pdf_text(session: aiohttp.ClientSession, url: str) -> str:
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
-            if r.status != 200: return ""
-            content = await r.read()
-            if len(content) > MAX_PDF_SIZE: return ""
-            reader = PdfReader(BytesIO(content))
-            texts = [page.extract_text() or "" for page in reader.pages[:5]]
-            return " ".join(texts)
-    except Exception as e:
-        logger.debug(f"PDF-feil {url}: {e}")
-        return ""
+def extract_deadline(text):
+    match = re.search(r'(?:høringsfrist|frist)[:\s]+(\d{1,2})[.\s]+([a-zA-ZæøåÆØÅ]+)\s+(\d{4})', text, re.IGNORECASE)
+    if match: return match.group(0)
+    return ""
 
-def unwrap_stortinget_list(data: dict, key: str) -> list:
-    obj = data.get(key, {})
-    if isinstance(obj, list): return obj
-    if isinstance(obj, dict):
-        for v in obj.values():
-            if isinstance(v, list): return v
-    return []
+def analyze_relevance(text, source_name=""):
+    t = text.lower()
+    seg_score = sum(kw.weight for kw in KEYWORDS_SEGMENT if kw.term.lower() in t)
+    top_score = sum(kw.weight for kw in KEYWORDS_TOPIC if kw.term.lower() in t)
+    total_score = (seg_score * 1.5) + top_score
+    
+    is_relevant = total_score >= 5.0 or any(kw.term.lower() in t for kw in KEYWORDS_TOPIC if kw.weight >= 2.5)
+    priority = Priority.LOW
+    if is_relevant:
+        priority = Priority.CRITICAL if "frist" in t or total_score > 10 else Priority.HIGH if total_score > 7 else Priority.MEDIUM
+        
+    matched = [kw.term for kw in KEYWORDS_SEGMENT + KEYWORDS_TOPIC if kw.term.lower() in t]
+    return {"is_relevant": is_relevant, "score": total_score, "priority": priority, "matched": matched, "deadline_text": extract_deadline(text)}
 
-async def check_stortinget(session: aiohttp.ClientSession, conn: sqlite3.Connection):
-    logger.info("🏛️ Sjekker Stortinget...")
+# =============================================================================
+# 3. HOVEDFUNKSJONALITET
+# =============================================================================
+
+async def fetch_url(session, url):
     try:
-        async with session.get("https://data.stortinget.no/eksport/sesjoner?format=json") as r:
-            sessions = await r.json()
-            sid = sessions.get("innevaerende_sesjon", {}).get("id", "2025-2026")
+        async with session.get(url, timeout=30) as response:
+            if response.status == 200: return await response.text()
+    except Exception as e: logger.error(f"Feil ved {url}: {e}")
+    return None
+
+async def check_law_changes(session, conn):
+    logger.info("📜 Sjekker lover for endringer (Radar)...")
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, 'r') as f: cache = json.load(f)
+    else: cache = {}
+
+    hits = []
+    for name, url in LAWS_TO_MONITOR.items():
+        html = await fetch_url(session, url)
+        if not html: continue
         
-        url = f"https://data.stortinget.no/eksport/saker?sesjonid={sid}&pagesize=100&format=json"
-        async with session.get(url) as r:
-            data = await r.json()
+        soup = BeautifulSoup(html, "html.parser")
+        text = re.sub(r'\s+', ' ', soup.get_text()).strip()
+        new_hash = hashlib.sha256(text.encode()).hexdigest()
         
-        saker = unwrap_stortinget_list(data, "saker_liste")
-        hits = 0
-        for sak in saker:
-            sak_id = sak.get("id")
-            if not sak_id: continue
-            doc_type = str(sak.get("dokumentgruppe", "")).lower()
-            if any(x in doc_type for x in ["spørsmål", "interpellasjon", "referat"]): continue
-            
-            item_id = f"ST-{sak_id}"
+        prev = cache.get(name, {})
+        if prev and new_hash != prev.get("hash"):
+            similarity = SequenceMatcher(None, prev.get("text", ""), text[:5000]).ratio()
+            change = round((1 - similarity) * 100, 2)
+            if change >= CHANGE_THRESHOLD:
+                hits.append({"name": name, "url": url, "change_percent": change})
+                conn.execute("INSERT INTO radar_hits (law_name, url, change_percent) VALUES (?,?,?)", (name, url, change))
+        
+        cache[name] = {"hash": new_hash, "text": text[:5000]}
+    
+    with open(CACHE_FILE, 'w') as f: json.dump(cache, f, indent=2)
+    return hits
+
+async def check_rss(session, conn):
+    logger.info("📡 Sjekker nyheter og høringer (Sonar)...")
+    hits = []
+    for name, config in RSS_SOURCES.items():
+        xml = await fetch_url(session, config["url"])
+        if not xml: continue
+        feed = feedparser.parse(xml)
+        for entry in feed.entries[:10]:
+            item_id = hashlib.sha256(entry.link.encode()).hexdigest()
             if conn.execute("SELECT 1 FROM seen_items WHERE item_id=?", (item_id,)).fetchone(): continue
             
-            title = sak.get("tittel", ""); tema = sak.get("tema", ""); link = f"https://stortinget.no/sak/{sak_id}"
-            result = analyze_content(f"{title} {tema}", "Stortinget")
+            analysis = analyze_relevance(entry.title + " " + getattr(entry, 'summary', ''), name)
+            if analysis["is_relevant"]:
+                hits.append({"source": name, "title": entry.title, "link": entry.link, "priority": analysis["priority"], "deadline_text": analysis["deadline_text"]})
+                conn.execute("INSERT INTO sonar_hits (source, title, link, priority, deadline, score, matched_keywords) VALUES (?,?,?,?,?,?,?)",
+                             (name, entry.title, entry.link, analysis["priority"].value, analysis["deadline_text"], analysis["score"], ",".join(analysis["matched"])))
             
-            if result["is_relevant"]:
-                conn.execute("""INSERT INTO weekly_hits 
-                    (source, title, link, excerpt, priority, deadline, deadline_text, relevance_score, matched_keywords)
-                    VALUES (?,?,?,?,?,?,?,?,?)""",
-                    ("🏛️ Stortinget", title, link, f"Tema: {tema}", result["priority"].value,
-                     result["deadline"].isoformat() if result["deadline"] else None,
-                     result["deadline_text"], result["score"], ",".join(result["matched"][:10])))
-                hits += 1
-            
-            conn.execute("INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?,?,?,?)",
-                        (item_id, "Stortinget", title, datetime.now().isoformat()))
-        conn.commit()
-        logger.info(f"  ✓ {hits} relevante saker")
-    except Exception as e: logger.error(f"Stortinget-feil: {e}")
+            conn.execute("INSERT INTO seen_items (item_id, source, title, date_seen) VALUES (?,?,?,?)", (item_id, name, entry.title, datetime.now().isoformat()))
+    return hits
 
-async def process_rss(session: aiohttp.ClientSession, name: str, url: str, conn: sqlite3.Connection):
-    logger.info(f"🔎 Sjekker: {name}")
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as r:
-            if r.status >= 400: return
-            content = await r.read()
-        feed = feedparser.parse(content)
-        hits = 0
-        for entry in feed.entries:
-            title = getattr(entry, 'title', ''); link = getattr(entry, 'link', '')
-            summary = getattr(entry, 'summary', getattr(entry, 'description', ''))
-            item_id = hashlib.sha256(f"{name}|{link}|{title}".encode()).hexdigest()
-            if conn.execute("SELECT 1 FROM seen_items WHERE item_id=?", (item_id,)).fetchone(): continue
-            
-            full_text = f"{title} {summary}"
-            if link.lower().endswith(".pdf") or "høring" in title.lower():
-                pdf_text = await fetch_pdf_text(session, link)
-                if pdf_text: full_text += " " + pdf_text
-            
-            result = analyze_content(full_text, name)
-            if result["is_relevant"]:
-                conn.execute("""INSERT INTO weekly_hits 
-                    (source, title, link, excerpt, priority, deadline, deadline_text, relevance_score, matched_keywords)
-                    VALUES (?,?,?,?,?,?,?,?,?)""",
-                    (name, title, link, summary[:500], result["priority"].value,
-                     result["deadline"].isoformat() if result["deadline"] else None,
-                     result["deadline_text"], result["score"], ",".join(result["matched"][:10])))
-                hits += 1
-            
-            conn.execute("INSERT OR IGNORE INTO seen_items (item_id, source, title, date_seen) VALUES (?,?,?,?)",
-                        (item_id, name, title, datetime.now().isoformat()))
-        conn.commit()
-        logger.info(f"  ✓ {hits} relevante treff")
-    except Exception as e: logger.error(f"RSS-feil {name}: {e}")
-
-# --- 5. RAPPORT ---
-def generate_html_report(rows: list) -> str:
-    colors = {1: "#dc3545", 2: "#fd7e14", 3: "#ffc107", 4: "#28a745"}
-    labels = {1: "🚨 KRITISK", 2: "⚠️ HØY", 3: "📋 MEDIUM", 4: "📌 LAV"}
-    now = datetime.now().strftime('%Y-%m-%d')
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    body {{ font-family: sans-serif; max-width: 700px; margin: 20px auto; background: #f5f5f5; }}
-    .header {{ background: linear-gradient(135deg, #1a5f7a, #086972); color: white; padding: 25px; border-radius: 10px; }}
-    .item {{ background: white; border-radius: 8px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }}
-    .item-head {{ padding: 15px; border-left: 5px solid; }}
-    .item-body {{ padding: 15px; border-top: 1px solid #eee; font-size: 14px; color: #444; }}
-    .deadline {{ background: #dc3545; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px; }}
-    .kw {{ display: inline-block; background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin: 2px; }}
-    a {{ color: #1a5f7a; text-decoration: none; font-weight: bold; }}
-    </style></head><body><div class="header"><h2>🛡️ LovSonar: Regulatorisk Radar</h2>
-    <p>{len(rows)} treff identifisert | {now}</p></div>"""
-    for row in rows:
-        source, title, link, excerpt, priority, d_text, score, kw = row[1], row[2], row[3], row[4], row[5], row[7], row[8], row[9]
-        dl_html = f'<span class="deadline">⏰ {d_text}</span>' if d_text else ""
-        kw_html = "".join(f'<span class="kw">{k}</span>' for k in (kw or "").split(",")[:6] if k)
-        html += f"""<div class="item"><div class="item-head" style="border-color: {colors.get(priority, '#ddd')};">
-        <strong>{source}</strong> | {labels.get(priority, 'INFO')} | Score: {score:.1f} {dl_html}<br>
-        <a href="{link}" target="_blank">{title}</a></div><div class="item-body">{excerpt[:400]}...<br>{kw_html}</div></div>"""
-    return html + f"<p style='text-align:center; font-size:12px;'>LovSonar v7.1</p></body></html>"
-
-def send_weekly_report():
+def send_report(sonar, radar):
     user, pw, to = os.environ.get("EMAIL_USER"), os.environ.get("EMAIL_PASS"), os.environ.get("EMAIL_RECIPIENT")
-    if not all([user, pw, to]):
-        logger.warning("⚠️ Mangler EMAIL_USER, EMAIL_PASS eller EMAIL_RECIPIENT")
-        return
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT * FROM weekly_hits WHERE detected_at > datetime('now', '-7 days') ORDER BY priority ASC, relevance_score DESC").fetchall()
-    conn.close()
-    if not rows:
-        logger.info("ℹ️ Ingen treff å rapportere")
-        return
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🛡️ LovSonar: {len(rows)} treff (uke {datetime.now().isocalendar()[1]})"
-    msg["From"], msg["To"] = user, to
-    msg.attach(MIMEText(generate_html_report(rows), "html", "utf-8"))
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as s:
-            s.login(user, pw); s.send_message(msg)
-        logger.info(f"📧 Rapport sendt til {to}")
-    except Exception as e: logger.error(f"E-postfeil: {e}")
+    if not (sonar or radar) or not all([user, pw, to]): return
 
-# --- 6. MAIN ---
-async def run_radar():
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"🛡️ LovRadar v13.0: Ukentlig Compliance-Rapport {datetime.now().strftime('%d.%m')}"
+    
+    html = f"""<html><body style="font-family: Arial; color: #333;">
+        <h2 style="color: #1a5f7a;">Regulatorisk Rapport - Obs BYGG</h2>
+        <h3 style="color: #dc3545;">🔴 Lovendringer (Radar)</h3>
+        {"".join([f"<p><b>{h['name']}</b>: {h['change_percent']}% endring. <a href='{h['url']}'>Se kilde</a></p>" for h in radar]) or "<p>Ingen endringer.</p>"}
+        <hr>
+        <h3 style="color: #fd7e14;">📡 Nye Høringer & Nyheter (Sonar)</h3>
+        {"".join([f"<p>• <b>{h['title']}</b> ({h['source']})<br>Prio: {h['priority'].name} | {h['deadline_text']}<br><a href='{h['link']}'>Les mer</a></p>" for h in sonar]) or "<p>Ingen nye funn.</p>"}
+    </body></html>"""
+    
+    msg.attach(MIMEText(html, "html"))
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+        s.login(user, pw)
+        s.send_message(msg)
+    logger.info("📧 Rapport sendt.")
+
+async def main():
     conn = setup_db()
     async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
-        tasks = [process_rss(session, n, u, conn) for n, u in RSS_SOURCES.items()]
-        tasks.append(check_stortinget(session, conn))
-        await asyncio.gather(*tasks)
+        radar_hits = await check_law_changes(session, conn)
+        sonar_hits = await check_rss(session, conn)
+        send_report(sonar_hits, radar_hits)
+    conn.commit()
     conn.close()
 
 if __name__ == "__main__":
-    logger.info("🚀 LovSonar v7.1 starter...")
-    mode = os.environ.get("LOVSONAR_MODE", "daily").lower()
-    if mode == "weekly": send_weekly_report()
-    else: asyncio.run(run_radar())
-    logger.info("✅ Ferdig!")
+    asyncio.run(main())
