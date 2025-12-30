@@ -1,0 +1,32 @@
+name: LovRadar v12 Ultimate # Dette navnet vises i GitHub-menyen
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  kjor_radar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Hent koden
+        uses: actions/checkout@v4
+
+      - name: Sett opp Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Installer verktøy
+        run: |
+          pip install requests beautifulsoup4 lxml feedparser pypdf aiohttp
+
+      - name: Kjør Radaren
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+        run: python lovradar.py # VIKTIG: Dette må være navnet på .py-filen din!
