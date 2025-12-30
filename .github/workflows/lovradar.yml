@@ -1,16 +1,16 @@
-name: LovRadar v13.0 Ultimate # Oppdatert navn for det nye systemet
+name: LovRadar v13.0 Ultimate
 
 on:
   schedule:
-    # Kjører hver morgen kl. 08:00 (07:00 UTC) for å fange opp nye høringer raskt
-    - cron: '0 7 * * *'
-  workflow_dispatch: # Lar deg starte den manuelt fra mobilen
+    # Kjører hver mandag kl. 08:00 (07:00 UTC)
+    - cron: '0 7 * * 1'
+  workflow_dispatch: # Lar deg starte den manuelt ved behov
 
 jobs:
   run_compliance_system:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # KRITISK: Gir roboten lov til å lagre databasen (.db)
+      contents: write # Gir roboten lov til å lagre databasen (.db)
 
     steps:
       - name: 1. Hent koden
@@ -19,12 +19,11 @@ jobs:
       - name: 2. Sett opp Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Bruker nyeste stabile Python for v13
+          python-version: '3.11'
 
-      - name: 3. Installer verktøykasse for v13
+      - name: 3. Installer verktøy
         run: |
           python -m pip install --upgrade pip
-          # Vi legger til feedparser og pypdf for Sonar-funksjonalitet
           pip install aiohttp feedparser beautifulsoup4 pypdf lxml
 
       - name: 4. Kjør LovRadar Analyse
@@ -35,11 +34,10 @@ jobs:
         run: python lovradar.py
 
       - name: 5. Lagre Historikk (Database & Cache)
-        # Dette steget gjør at v13 husker tidligere funn og bygger historikk
+        # Dette sikrer at v13 husker tidligere funn til neste mandag
         run: |
           git config --global user.name "LovRadar Bot"
           git config --global user.email "bot@lovradar.no"
-          # Vi lagrer både databasen og cache-filen
           git add lovradar_v13.db lovradar_v13_cache.json || true
-          git commit -m "Oppdaterte regulatorisk database [skip ci]" || exit 0
+          git commit -m "Oppdaterte ukentlig regulatorisk database [skip ci]" || exit 0
           git push
