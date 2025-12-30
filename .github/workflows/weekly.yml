@@ -1,1 +1,45 @@
+name: LovRadar v13.0 Weekly Compliance
 
+on:
+  schedule:
+    # Kjører hver mandag kl. 08:00 (07:00 UTC)
+    - cron: '0 7 * * 1'
+  workflow_dispatch: # Lar deg starte den manuelt fra GitHub-nettsiden ved behov
+
+jobs:
+  run_compliance_system:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Nødvendig for å lagre databasen tilbake til arkivet
+
+    steps:
+      - name: 1. Hent koden
+        uses: actions/checkout@v4
+
+      - name: 2. Sett opp Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 3. Installer verktøykasse for v13
+        run: |
+          python -m pip install --upgrade pip
+          # Her installeres alt v13 trenger: PDF-lesing og RSS-håndtering
+          pip install aiohttp feedparser beautifulsoup4 pypdf lxml
+
+      - name: 4. Kjør LovRadar Analyse
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+        run: python lovradar.py
+
+      - name: 5. Lagre regulatorisk historikk (Database)
+        # Dette steget er det som gjør v13 unik - det lagrer "hukommelsen"
+        run: |
+          git config --global user.name "LovRadar Bot"
+          git config --global user.email "bot@lovradar.no"
+          # Vi legger til alle v13-spesifikke filer
+          git add lovradar_v13.db lovradar_v13_cache.json || true
+          git commit -m "Oppdaterte ukentlig regulatorisk database [skip ci]" || exit 0
+          git push
