@@ -31,10 +31,10 @@ except ImportError:
 # =============================================================================
 
 class Priority(Enum):
-    CRITICAL = 1  # Frist < 30 dager eller stor lovendring
-    HIGH = 2      # Relevant + frist, eller betydelig endring
-    MEDIUM = 3    # Relevant tema
-    LOW = 4       # Mulig interessant
+    CRITICAL = 1
+    HIGH = 2
+    MEDIUM = 3
+    LOW = 4
 
 @dataclass
 class Keyword:
@@ -43,7 +43,6 @@ class Keyword:
     category: str = "general"
     word_boundary: bool = True
 
-# --- Spesialiserte nøkkelord for Obs BYGG / Varehandel ---
 KEYWORDS_SEGMENT = [
     Keyword("byggevare", 2.0, "core"), Keyword("trelast", 1.5, "core"),
     Keyword("jernvare", 1.5, "core"), Keyword("detaljhandel", 1.0, "retail"),
@@ -51,15 +50,12 @@ KEYWORDS_SEGMENT = [
 ]
 
 KEYWORDS_TOPIC = [
-    # EU & Bærekraft (ESPR, Digitalt produktpass er kritisk for 2026)
     Keyword("espr", 3.0, "eu"), Keyword("digitalt produktpass", 3.0, "digital"),
     Keyword("dpp", 2.5, "digital"), Keyword("ppwr", 2.5, "packaging"),
     Keyword("eudr", 2.5, "timber"), Keyword("miljødeklarasjon", 2.0, "sustainability"),
     Keyword("epd", 2.0, "sustainability"), Keyword("bærekraft", 1.5, "sustainability"),
-    # Kjemikalier & Sikkerhet
     Keyword("reach", 2.0, "chemicals"), Keyword("pfas", 2.5, "chemicals"),
     Keyword("asbest", 3.0, "danger"), Keyword("farlige stoffer", 2.0, "chemicals"),
-    # Juss & Compliance
     Keyword("åpenhetsloven", 2.5, "compliance"), Keyword("aktsomhet", 2.0, "compliance"),
     Keyword("grønnvasking", 2.5, "marketing"), Keyword("tek17", 2.0, "building")
 ]
@@ -69,7 +65,6 @@ KEYWORDS_CRITICAL = [
     Keyword("trer i kraft", 2.5, "deadline"), Keyword("forbud", 2.5, "legal")
 ]
 
-# --- KILDE-OPPSETT ---
 RSS_SOURCES = {
     "📢 Høringer": {"url": "https://www.regjeringen.no/no/dokument/hoyringar/id1763/?show=rss", "max_age_days": 90},
     "🇪🇺 Europapolitikk": {"url": "https://www.regjeringen.no/no/tema/europapolitikk/id1160/?show=rss", "max_age_days": 120},
@@ -143,9 +138,9 @@ async def fetch_url(session, url):
 
 async def check_law_changes(session, conn):
     logger.info("📜 Sjekker lover for endringer (Radar)...")
+    cache = {}
     if os.path.exists(CACHE_FILE):
         with open(CACHE_FILE, 'r') as f: cache = json.load(f)
-    else: cache = {}
 
     hits = []
     for name, url in LAWS_TO_MONITOR.items():
@@ -190,26 +185,42 @@ async def check_rss(session, conn):
     return hits
 
 def send_report(sonar, radar):
-    user, pw, to = os.environ.get("EMAIL_USER"), os.environ.get("EMAIL_PASS"), os.environ.get("EMAIL_RECIPIENT")
-    if not (sonar or radar) or not all([user, pw, to]): return
+    user = os.environ.get("EMAIL_USER", "").strip()
+    pw = os.environ.get("EMAIL_PASS", "").strip()
+    to = os.environ.get("EMAIL_RECIPIENT", "").strip()
+    
+    if not (sonar or radar):
+        logger.info("Ingen nye funn å rapportere.")
+        return
+        
+    if not all([user, pw, to]):
+        logger.error("Mangler e-post-konfigurasjon i GitHub Secrets.")
+        return
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🛡️ LovRadar v13.0: Ukentlig Compliance-Rapport {datetime.now().strftime('%d.%m')}"
+    msg["Subject"] = f"🛡️ LovRadar v13.0: Compliance-Rapport {datetime.now().strftime('%d.%m')}"
+    msg["From"] = user
+    msg["To"] = to
     
     html = f"""<html><body style="font-family: Arial; color: #333;">
         <h2 style="color: #1a5f7a;">Regulatorisk Rapport - Obs BYGG</h2>
-        <h3 style="color: #dc3545;">🔴 Lovendringer (Radar)</h3>
-        {"".join([f"<p><b>{h['name']}</b>: {h['change_percent']}% endring. <a href='{h['url']}'>Se kilde</a></p>" for h in radar]) or "<p>Ingen endringer.</p>"}
+        <p><i>Generert av din AI-assistent for overvåkning av varehandel.</i></p>
+        <h3 style="color: #dc3545;">🔴 Lovendringer detektert (Radar)</h3>
+        {"".join([f"<p><b>{h['name']}</b>: {h['change_percent']}% endring detektert. <a href='{h['url']}'>Gå til Lovdata</a></p>" for h in radar]) or "<p>Ingen endringer i eksisterende lover funnet i denne skanningen.</p>"}
         <hr>
-        <h3 style="color: #fd7e14;">📡 Nye Høringer & Nyheter (Sonar)</h3>
-        {"".join([f"<p>• <b>{h['title']}</b> ({h['source']})<br>Prio: {h['priority'].name} | {h['deadline_text']}<br><a href='{h['link']}'>Les mer</a></p>" for h in sonar]) or "<p>Ingen nye funn.</p>"}
+        <h3 style="color: #fd7e14;">📡 Nye Høringer & Relevante Saker (Sonar)</h3>
+        {"".join([f"<div style='border-left: 4px solid #fd7e14; padding-left: 10px; margin-bottom: 15px;'><p>• <b>{h['title']}</b><br>Kilde: {h['source']} | Prio: {h['priority'].name}<br><i>{h['deadline_text']}</i><br><a href='{h['link']}'>Åpne kilde</a></p></div>" for h in sonar]) or "<p>Ingen nye relevante treff i dag.</p>"}
     </body></html>"""
     
-    msg.attach(MIMEText(html, "html"))
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-        s.login(user, pw)
-        s.send_message(msg)
-    logger.info("📧 Rapport sendt.")
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(user, pw)
+            s.send_message(msg)
+        logger.info(f"📧 Rapport sendt suksessfullt til {to}")
+    except Exception as e:
+        logger.error(f"Kunne ikke sende e-post: {e}")
 
 async def main():
     conn = setup_db()
@@ -221,4 +232,5 @@ async def main():
     conn.close()
 
 if __name__ == "__main__":
+    asyncio.run(main())
     asyncio.run(main())
