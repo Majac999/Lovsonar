@@ -1,53 +1,37 @@
-🔭 LovSonar – Strategisk Fremtidsovervåking (Pilot)
+LovSonar: Strategisk Fremtidsovervåking (Pilot)
 
-LovSonar er et eksperimentelt open-source verktøy utviklet for tidlig varsling av politiske forslag, EU-direktiver og regulatoriske trender. Mens tradisjonelle verktøy overvåker lover som gjelder i dag, er LovSonar et pilotprosjekt som forsøker å se lenger frem.
+​LovSonar er et eksperimentelt open-source verktøy utviklet for tidlig varsling av politiske forslag, EU-direktiver og regulatoriske trender. Mens tradisjonelle verktøy overvåker lover som gjelder i dag, er LovSonar et pilotprosjekt som analyserer horisonten.
 
-🔮 Formål & Bakgrunn
-Prosjektet utforsker hvordan vi kan fange opp politiske signaler og kommende krav før de blir vedtatt. I en lavprisbransje er bærekraftstiltak ofte forbundet med økte kostnader. LovSonar skal hjelpe virksomheter med å vurdere når bærekraft går fra å være et frivillig valg til å bli et felles regulatorisk krav for hele bransjen.
+​🔮 Formål & Bakgrunn
+Prosjektet utforsker hvordan vi kan fange opp politiske signaler og kommende krav før de blir vedtatt. I en lavprisbransje er bærekraftstiltak ofte forbundet med økte kostnader. LovSonar hjelper virksomheten med å vurdere når bærekraft går fra å være et frivillig valg til å bli et felles regulatorisk krav for hele bransjen.
+​Dette er avgjørende for å sikre at overgangen til grønnere drift skjer i takt med markedet, slik at man unngår en kostnadsside som svekker konkurransekraften på pris.
 
-Dette er viktig for å sikre at overgangen til grønnere drift skjer i takt med resten av markedet, slik at man unngår å bli stående alene med kostnader som svekker konkurransekraften (pris).
+​Strategiske hypoteser i pilotfasen:
+​Kostnadskontroll: Identifisere kommende avgifter og krav tidlig nok til å planlegge pris- og sortimentsendringer.
 
-Strategiske hypoteser i pilotfasen:
+​Nivellering av spillefeltet: Innsikt i når regulatoriske krav tvinger frem en lik standard for alle markedsaktører.
 
-Kostnadskontroll: Kan vi identifisere kommende avgifter tidlig nok til å planlegge pris- og sortimentsendringer?
+​EMV-innsikt: Tidlig analyse av hvordan egne merkevarer (Private Labels) påvirkes av kommende EU-krav til sirkulær design og dokumentasjon.
 
-Nivellering av spillefeltet: Kan overvåking av regulatoriske trender gi innsikt i når hele bransjen må følge de samme bærekraftskravene?
+​🎯 Hva speider piloten etter?
+Verktøyet skanner offisielle kilder som dikterer varehandelens fremtidige rammevilkår:
 
-EMV-innsikt: Hvordan påvirkes egne merkevarer (Private Labels) av kommende EU-krav til emballasje og produktdesign?
+​Norsk Politikk: Stortingsforslag (Representantforslag), NOU-er og offentlige høringsnotater.
 
-🎯 Hva speider piloten etter?
-Verktøyet er foreløpig konfigurert for å skanne kilder som påvirker varehandelens rammevilkår, med særlig fokus på sirkulærøkonomi og bærekraft:
+​EU & EØS: Green Deal-dokumentasjon, herunder ESPR (Ecodesign) og PPWR (Emballasje).
 
-Norsk Politikk & Lovarbeid 🇳🇴
+​Teknologitrender: Utvikling innen Digitale Produktpass (DPP) og sporbarhetskrav.
 
-Stortingsforslag (Representantforslag), NOU-er og høringsnotater.
-
-EU & EØS-signaler 🇪🇺
-
-Dokumentasjon rundt Green Deal (f.eks. ESPR og PPWR).
-
-Digitale produktpass (DPP) og sporbarhetstrender.
-
-🤖 Hvordan det virker (Eksperimentell Workflow)
+​🤖 Metodikk (Eksperimentell Workflow)
 Dette er en teknisk pilot bygget på Python og GitHub Actions:
 
-Innsamling & Filtrering:
+​Innsamling: Henter data via offisielle API-er og RSS-strømmer fra bl.a. Stortinget, Regjeringen og Lovdata (NLOD 2.0).
 
-Henter RSS-data og gjennomfører en enkel PDF-analyse av offentlige dokumenter.
+​Filtrering: Bruker vektede nøkkelord for å isolere saker relevante for varehandelens verdikjede.
 
-Bruker nøkkelord for å sortere ut saker som er relevante for varehandel og bærekraft.
+​AI-støttet analyse: Genererer strukturerte utkast som klargjøres for analyse i LLM-modeller (AI), med fokus på Sannsynlighet, Konsekvens og Tidshorisont.
 
-AI-støttet Rapportering:
-
-Genererer utkast til ukesrapporter som er formatert for videre analyse i en LLM (AI-modell).
-
-Modellen tester vurderinger av Sannsynlighet, Konsekvens og Tidshorisont.
-
-🛠 Teknisk Status (WIP)
-Status: 🟢 Aktiv Pilot / MVP (Minimum Viable Product).
-
-Språk: Python 3.10.
-
-Stack: feedparser, pypdf, SQLite, GitHub Actions.
-
-Merk: Som et pilotprosjekt er verktøyet under kontinuerlig utvikling, og resultatene må alltid verifiseres mot originalkilder.
+​🛠 Teknisk Status
+​Status: 🟢 Aktiv Pilot / MVP (Minimum Viable Product).
+​Lisens: MIT / Åpne offentlige data (NLOD 2.0).
+​Stack: Python 3.11, aiohttp, SQLite, GitHub Actions.
