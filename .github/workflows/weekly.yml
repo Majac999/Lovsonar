@@ -1,7 +1,8 @@
-name: LovSonar v3.0 Compliance
+name: LovSonar v3.0 Weekly Compliance
 
 on:
   schedule:
+    # Kjører hver mandag kl. 08:00 norsk tid (07:00 UTC)
     - cron: '0 7 * * 1'
   workflow_dispatch:
 
@@ -37,5 +38,5 @@ jobs:
           git config --global user.name "LovSonar Bot"
           git config --global user.email "bot@lovsonar.no"
           git add *.db *.json || true
-          git commit -m "Oppdaterte database [skip ci]" || exit 0
+          git commit -m "Oppdaterte ukentlig database [skip ci]" || exit 0
           git push
