@@ -1,38 +1,31 @@
-# Python / Standard
-__pycache__/
-*.py[codz]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# --- LovSonar Spesifikke filer ---
+# Vi ignorerer databaser og cache for å unngå konflikter og holde repoet ryddig
+*.db
+lovsonar_cache*.json
+lovsonar_v*.db
 
-# Virtuelle miljøer
+# --- Sikkerhet ---
+# Svært viktig: Vi må aldri laste opp miljøvariabler med passord (EMAIL_PASS osv.)
 .env
-.venv
-env/
+
+# --- Python ---
+# Bytecode og kompilerte filer (trengs ikke på GitHub)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtuelle miljøer ---
+# Disse inneholder lokale kopier av biblioteker (aiohttp, requests osv.)
 venv/
-ENV/
+.venv/
+env/
+build/
+dist/
 
-# Prosjektfiler
-nye_saker.json
-lovsonar_seen.db-journal
+# --- OS-spesifikke filer ---
+# Filer som lages av Windows eller macOS i mapper
+.DS_Store
+Thumbs.db
 
-# VIKTIG: Utropstegnet betyr at vi IKKE ignorerer selve databasen
-# Vi vil at GitHub skal lagre historikken din.
-!lovsonar_seen.db
+# --- Loggfiler ---
+*.log
