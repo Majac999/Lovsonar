@@ -1,0 +1,35 @@
+name: LovSonar Weekly Scan
+
+on:
+  schedule:
+    # Kjører kl. 08:00 hver mandag
+    - cron: '0 8 * * 1'
+  
+  # Lar deg starte skanningen manuelt med en knapp
+  workflow_dispatch:
+
+jobs:
+  run-sonar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Sjekk ut kode
+        uses: actions/checkout@v4
+
+      - name: Sett opp Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Installer avhengigheter
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Kjør LovSonar
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+        run: python lovsonar.py
+
