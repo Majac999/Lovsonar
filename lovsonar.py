@@ -554,7 +554,7 @@ class RegjeringenSource:
     SELECTORS = [
         "a[href*='/hoeringer/']",
         "a[href*='/horinger/']",
-        ".444-LI a",
+        "[class*='LI'] a",
     ]
 
     def __init__(self, session: requests.Session, analyzer: Analyzer, db: Database):
@@ -576,9 +576,12 @@ class RegjeringenSource:
                 # Prov selektorer
                 links = []
                 for selector in self.SELECTORS:
-                    links = soup.select(selector)[:15]
-                    if links:
-                        break
+                    try:
+                        links = soup.select(selector)[:15]
+                        if links:
+                            break
+                    except Exception:
+                        continue  # Ugyldig selektor, prov neste
 
                 for link in links:
                     title = link.get_text(strip=True)
@@ -1065,3 +1068,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
