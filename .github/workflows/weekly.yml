@@ -1,41 +1,36 @@
-+  1 name: LovSonar v4.0 Weekly Compliance
++  1 name: LovSonar v6.1 Ukentlig Rapport
 +  2 
 +  3 on:
 +  4   schedule:
-+  5     - cron: '0 7 * * 1'
-+  6   workflow_dispatch:
-+  7 
-+  8 jobs:
-+  9   run_compliance_system:
-+ 10     runs-on: ubuntu-latest
-+ 11     permissions:
-+ 12       contents: write
-+ 13 
-+ 14     steps:
-+ 15       - name: 1. Hent koden
-+ 16         uses: actions/checkout@v4
-+ 17 
-+ 18       - name: 2. Sett opp Python
-+ 19         uses: actions/setup-python@v5
-+ 20         with:
-+ 21           python-version: '3.11'
-+ 22 
-+ 23       - name: 3. Installer avhengigheter
-+ 24         run: |
-+ 25           python -m pip install --upgrade pip
-+ 26           pip install -r requirements.txt
-+ 27 
-+ 28       - name: 4. Kjor LovSonar Analyse
-+ 29         env:
-+ 30           EMAIL_USER: ${{ secrets.EMAIL_USER }}
-+ 31           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-+ 32           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
-+ 33         run: python lovsonar_v4.py
-+ 34 
-+ 35       - name: 5. Lagre database
-+ 36         run: |
-+ 37           git config --global user.name "LovSonar Bot"
-+ 38           git config --global user.email "bot@lovsonar.no"
-+ 39           git add *.db *.json || true
-+ 40           git commit -m "Oppdaterte ukentlig database [skip ci]" || exit 0
-+ 41           git push
++  5     # Hver mandag kl. 07:00 UTC (08:00 norsk tid)
++  6     - cron: '0 7 * * 1'
++  7   workflow_dispatch:
++  8 
++  9 jobs:
++ 10   lovsonar_weekly:
++ 11     runs-on: ubuntu-latest
++ 12     permissions:
++ 13       contents: write
++ 14 
++ 15     steps:
++ 16       - name: Hent kode
++ 17         uses: actions/checkout@v4
++ 18 
++ 19       - name: Sett opp Python
++ 20         uses: actions/setup-python@v5
++ 21         with:
++ 22           python-version: '3.11'
++ 23 
++ 24       - name: Installer avhengigheter
++ 25       run: |
++ 26          n -m pip install --upgrade pip
++ 27      install -r requirements.txt
++ 28 
++ 29       - name: Kjor LovSr v6.1
++ 30       env:
++ 31        L_USER: ${{ secrets.EMAIL_USER }}
++ 32      L_PASS: ${{ secrets.EMA}}
++ 33        CIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
++ 34         run:ython lovsonar_v6.p - name: Lagre og rapporun: |
++ 35     t config --global userovSonar Bot"
++ 36       config user.
