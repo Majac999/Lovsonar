@@ -9,4 +9,4 @@
 🤖 Metodikk (Eksperimentell Workflow)LovSonar benytter en moderne, automatisert arbeidsflyt bygget på Python og GitHub Actions:Innsamling: Henter data via offisielle API-er og RSS-strømmer fra bl.a. Stortinget, Regjeringen og Lovdata (NLOD 2.0).Filtrering: Bruker vektede nøkkelord for å isolere saker relevante for varehandelens verdikjede.AI-støttet analyse: Genererer strukturerte utkast som klargjøres for analyse i LLM-modeller (AI), med fokus på Sannsynlighet, Konsekvens og Tidshorisont.
 
 🛠 Teknisk StatusStatus: 
-🟢 Aktiv Pilot / MVP (Minimum Viable Product).Stack: Python 3.11, aiohttp, SQLite, GitHub Actions.Lisens: MIT / Åpne offentlige data (NLOD 2.0).
+🟢 Aktiv Pilot / MVP (Minimum Viable Product). Stack: Python 3.11, aiohttp, SQLite, GitHub Actions.Lisens: MIT / Åpne offentlige data (NLOD 2.0).
