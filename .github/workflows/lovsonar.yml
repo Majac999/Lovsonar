@@ -1,40 +1,40 @@
-+  1 name: LovSonar Scan
-+  2 
-+  3 on:
-+  4   schedule:
-+  5     - cron: '0 7 * * 3'  # Onsdag kl 07:00 UTC (08:00 norsk tid)
-+  6   workflow_dispatch:  # Manuell kjøring
-+  7 
-+  8 permissions:
-+  9   contents: write
-+ 10 
-+ 11 jobs:
-+ 12   scan_and_monitor:
-+ 13     runs-on: ubuntu-latest
-+ 14 
-+ 15     steps:
-+ 16     - name: Checkout repository
-+ 17       uses: actions/checkout@v4
-+ 18 
-+ 19     - name: Setup Python
-+ 20       uses: actions/setup-python@v5
-+ 21       with:
-+ 22         python-version: '3.11'
-+ 23 
-+ 24     - name: Install dependencies
-+ 25       run: pip install aiohttp feedparser beautifulsoup4 lxml
-+ 26 
-+ 27     - name: Run LovSonar
-+ 28       env:
-+ 29         EMAIL_USER: ${{ secrets.EMAIL_USER }}
-+ 30         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-+ 31         EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
-+ 32       run: python lovsonar.py
-+ 33 
-+ 34     - name: Commit cache and reports
-+ 35       run: |
-+ 36         git config --global user.name "LovSonar Bot"
-+ 37         git config --global user.email "lovsonar@bot.local"
-+ 38         git add lovsonar_cache.json lovsonar_rapport_*.md lovsonar_rapport_*.json || true
-+ 39         git diff --staged --quiet || git commit -m "LovSonar: Rapport $(date +'%Y-%m-%d')"
-+ 40         git push || true
+name: LovSonar Scan
+
+on:
+  schedule:
+    - cron: '0 7 * * 3'  # Onsdag kl 07:00 UTC (08:00 norsk tid)
+  workflow_dispatch:  # Manuell kjøring
+
+permissions:
+  contents: write
+
+jobs:
+  scan_and_monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: pip install aiohttp feedparser beautifulsoup4 lxml
+
+    - name: Run LovSonar
+      env:
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+      run: python lovsonar.py
+
+    - name: Commit cache and reports
+      run: |
+        git config --global user.name "LovSonar Bot"
+        git config --global user.email "lovsonar@bot.local"
+        git add lovsonar_cache.json lovsonar_rapport_*.md lovsonar_rapport_*.json || true
+        git diff --staged --quiet || git commit -m "LovSonar: Rapport $(date +'%Y-%m-%d')"
+        git push || true
