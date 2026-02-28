@@ -66,48 +66,59 @@ SONAR_KILDER = {
         "type": "rss",
         "kategori": "proposisjon"
     },
-    "regjeringen_nyheter": {
-        "url": "https://www.regjeringen.no/no/aktuelt/nyheter/id2006120/?type=rss",
+    "regjeringen_nyheter_klima": {
+        "url": "https://www.regjeringen.no/no/tema/klima-og-miljo/innsiktsartikler-klima-miljo/id2076114/?type=rss",
         "type": "rss",
         "kategori": "nyhet"
     },
-    "regjeringen_horinger_aktive": {
-        "url": "https://www.regjeringen.no/no/dokument/hoeringer/id438325/?type=rss",
+    "regjeringen_pressemeldinger": {
+        "url": "https://www.regjeringen.no/no/aktuelt/nyheter/id2006120/?type=rss",
         "type": "rss",
-        "kategori": "horing"
+        "kategori": "nyhet"
     }
 }
 
-# Nøkkelord tilpasset FREMTIDIGE reguleringer
+# Nøkkelord tilpasset FREMTIDIGE reguleringer (brede termer for bedre treff)
 FREMTID_KEYWORDS = {
     "sirkulær_økonomi": [
         "sirkulær", "produktpass", "dpp", "digital produktpass", "reparerbarhet",
         "levetid", "modularitet", "resirkulering", "gjenvinning", "gjenbruk",
-        "ecodesign", "espr", "økodesign"
+        "ecodesign", "espr", "økodesign", "avfall", "materialgjenvinning"
     ],
     "emballasje": [
         "emballasje", "ppwr", "packaging", "plastemballasje", "gjenbruksemballasje",
-        "emballasjeforordningen", "produsentansvar", "pant"
+        "emballasjeforordningen", "produsentansvar", "pant", "plast", "engangsemballasje"
     ],
     "klima_energi": [
         "klimagass", "co2", "karbonavtrykk", "klimanøytral", "nullutslipp",
-        "grønn", "fornybar", "energimerking", "energikrav"
+        "grønn", "fornybar", "energimerking", "energikrav", "klima", "utslipp",
+        "bærekraft", "miljø"
     ],
     "kjemikalier": [
         "reach", "svhc", "farlige stoffer", "kjemikalier", "biocid", "clp",
-        "mikroplast", "pfas", "evige kjemikalier"
+        "mikroplast", "pfas", "evige kjemikalier", "kjemikalie", "helseskadelig"
     ],
     "sporbarhet": [
         "sporbarhet", "dokumentasjon", "leverandørkjede", "due diligence",
-        "åpenhet", "menneskerettigheter", "tømmer", "eutr", "konfliktmineraler"
+        "åpenhet", "menneskerettigheter", "tømmer", "eutr", "konfliktmineraler",
+        "verdikjede", "lieferandøransvar"
     ],
     "grønnvasking": [
         "grønnvasking", "greenwashing", "miljøpåstand", "bærekraftspåstand",
-        "markedsføring", "villedende", "dokumenterbar"
+        "markedsføring", "villedende", "dokumenterbar", "miljømerking"
     ],
     "bygg_produkter": [
         "byggevare", "byggprodukt", "ce-merking", "dok", "produktdokumentasjon",
-        "tek", "byggteknisk", "energieffektiv"
+        "tek", "byggteknisk", "energieffektiv", "bygg", "konstruksjon",
+        "byggmateriale", "isolasjon"
+    ],
+    "eu_regelverk": [
+        "eu-direktiv", "eu-forordning", "eøs", "green deal", "grønn giv",
+        "europakommisjonen", "eu-krav", "europeisk"
+    ],
+    "politiske_prosesser": [
+        "høringsnotat", "nou", "stortingsmelding", "proposisjon", "lovforslag",
+        "representantforslag", "høring", "odelsting", "innspill"
     ]
 }
 
@@ -615,4 +626,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
