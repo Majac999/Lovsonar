@@ -61,30 +61,20 @@ class Signal:
 
 # Strategiske kilder - FREMTIDSRETTEDE
 SONAR_KILDER = {
-    "stortinget_saker": {
-        "url": "https://data.stortinget.no/eksport/saker?format=json&sesjonid=2023-2024",
-        "type": "api",
-        "kategori": "norsk_politikk"
-    },
-    "regjeringen_horinger": {
-        "url": "https://www.regjeringen.no/no/dokument/horinger/id438325/?type=rss",
-        "type": "rss",
-        "kategori": "horinger"
-    },
-    "regjeringen_nou": {
-        "url": "https://www.regjeringen.no/no/dokumenter/nou-er/id438249/?type=rss",
-        "type": "rss",
-        "kategori": "nou"
-    },
-    "regjeringen_proposisjoner": {
-        "url": "https://www.regjeringen.no/no/dokumenter/proposisjoner/id438246/?type=rss",
+    "regjeringen_dokumenter": {
+        "url": "https://www.regjeringen.no/no/dokument/id2000006/?type=rss",
         "type": "rss",
         "kategori": "proposisjon"
     },
-    "eur_lex_miljopakken": {
-        "url": "https://eur-lex.europa.eu/search.html?qid=1234567890&DTS_DOM=EU_LAW&type=advanced&lang=en&SUBDOM_INIT=ALL_ALL&DTS_SUBDOM=ALL_ALL",
-        "type": "web",  # Må scrapes
-        "kategori": "eu"
+    "regjeringen_nyheter": {
+        "url": "https://www.regjeringen.no/no/aktuelt/nyheter/id2006120/?type=rss",
+        "type": "rss",
+        "kategori": "nyhet"
+    },
+    "regjeringen_horinger_aktive": {
+        "url": "https://www.regjeringen.no/no/dokument/hoeringer/id438325/?type=rss",
+        "type": "rss",
+        "kategori": "horing"
     }
 }
 
