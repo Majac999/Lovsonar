@@ -1,779 +1,627 @@
-#!/usr/bin/env python3
-"""
-LovRadar v14.1 - Strategisk Regulatorisk Overvåkning
-Bærekraft & Handel for Byggevarebransjen
-
-Ny i v14.1:
-- Markdown-rapporter for enkel deling
-- Prioritering av funn (Kritisk/Viktig/Info)
-- Deadline-parsing fra nyheter
-- Forbedrede handlingsforslag
-"""
-
-import os
-import json
-import hashlib
-import smtplib
-import difflib
-import re
-import asyncio
-import aiohttp
-import logging
-from datetime import datetime, date
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from dataclasses import dataclass, field, asdict
-from typing import Optional
-from collections import Counter
-from bs4 import BeautifulSoup
-import feedparser
-
-# --- KONFIGURASJON ---
-
-@dataclass
-class LovKilde:
-    navn: str
-    url: str
-    kategori: str
-    beskrivelse: str = ""
-
-@dataclass
-class RSSKilde:
-    navn: str
-    url: str
-    kategori: str
-
-# Strategisk Område 1: Miljø, Kjemikalier & Bærekraft
-MILJO_LOVER = [
-    LovKilde("REACH-forskriften", "https://lovdata.no/dokument/SF/forskrift/2008-05-30-516", "miljø", "Kjemikalier og stoffer"),
-    LovKilde("CLP-forskriften", "https://lovdata.no/dokument/SF/forskrift/2012-06-16-622", "miljø", "Klassifisering og merking"),
-    LovKilde("Avfallsforskriften", "https://lovdata.no/dokument/SF/forskrift/2004-06-01-930", "miljø", "Håndtering og sortering"),
-    LovKilde("Biocidforskriften", "https://lovdata.no/dokument/SF/forskrift/2017-04-18-480", "miljø", "Impregnering og skadedyr"),
-    LovKilde("Lov om bærekraftig finans", "https://lovdata.no/dokument/NL/lov/2021-12-22-161", "miljø", "Taksonomi"),
-    LovKilde("Produktforskriften", "https://lovdata.no/dokument/SF/forskrift/2004-06-01-922", "miljø", "Farlige stoffer i produkter"),
-]
-
-# Strategisk Område 2: Bygg og Produktkrav
-BYGG_LOVER = [
-    LovKilde("DOK-forskriften", "https://lovdata.no/dokument/SF/forskrift/2013-12-17-1579", "bygg", "Dokumentasjon av byggevarer"),
-    LovKilde("TEK17", "https://lovdata.no/dokument/SF/forskrift/2017-06-19-840", "bygg", "Byggteknisk forskrift"),
-    LovKilde("TEK17 Kap 9 (Miljø)", "https://www.dibk.no/regelverk/byggteknisk-forskrift-tek17/9/9-1", "bygg", "Miljøkrav i bygg"),
-    LovKilde("Produktkontrolloven", "https://lovdata.no/dokument/NL/lov/1976-06-11-79", "bygg", "Produktsikkerhet"),
-    LovKilde("Tømmerforskriften", "https://lovdata.no/dokument/SF/forskrift/2015-04-24-406", "bygg", "Sporbarhet og import"),
-    LovKilde("FEL-forskriften", "https://lovdata.no/dokument/SF/forskrift/1998-11-06-1060", "bygg", "Elektriske lavspenningsanlegg"),
-    LovKilde("Internkontrollforskriften", "https://lovdata.no/dokument/SF/forskrift/1996-12-06-1127", "bygg", "HMS og rutiner"),
-    LovKilde("Plan- og bygningsloven", "https://lovdata.no/dokument/NL/lov/2008-06-27-71", "bygg", "Hovedlov for bygging"),
-]
-
-# Strategisk Område 3: Handel og Forbruker
-HANDEL_LOVER = [
-    LovKilde("Forbrukerkjøpsloven", "https://lovdata.no/dokument/NL/lov/2002-06-21-34", "handel", "Reklamasjon og rettigheter"),
-    LovKilde("Kjøpsloven", "https://lovdata.no/dokument/NL/lov/1988-05-13-27", "handel", "Næringskjøp"),
-    LovKilde("Markedsføringsloven", "https://lovdata.no/dokument/NL/lov/2009-01-09-2", "handel", "Miljøpåstander/grønnvasking"),
-    LovKilde("Åpenhetsloven", "https://lovdata.no/dokument/NL/lov/2021-06-18-99", "handel", "Leverandørkjeder"),
-    LovKilde("Regnskapsloven", "https://lovdata.no/dokument/NL/lov/1998-07-17-56", "handel", "Bærekraftsrapportering/CSRD"),
-    LovKilde("Angrerettloven", "https://lovdata.no/dokument/NL/lov/2014-06-20-27", "handel", "Fjernsalg"),
-    LovKilde("Ehandelsloven", "https://lovdata.no/dokument/NL/lov/2003-05-23-35", "handel", "Elektronisk handel"),
-]
-
-ALLE_LOVER = MILJO_LOVER + BYGG_LOVER + HANDEL_LOVER
-
-RSS_KILDER = [
-    RSSKilde("Regjeringen: Nyheter", "https://www.regjeringen.no/no/aktuelt/nyheter/id2006120/?type=rss", "alle"),
-    RSSKilde("Regjeringen: Dokumenter", "https://www.regjeringen.no/no/dokument/id2000006/?type=rss", "alle"),
-    RSSKilde("Forbrukertilsynet", "https://www.forbrukertilsynet.no/feed", "handel"),
-]
-
-KEYWORDS = {
-    "miljø": [
-        "bærekraft", "sirkulær", "grønnvasking", "miljøkrav", "klimagass", "utslipp",
-        "resirkulering", "gjenvinning", "avfall", "kjemikalier", "reach", "svhc",
-        "miljødeklarasjon", "epd", "livssyklus", "karbonavtrykk", "taksonomi",
-        "biocid", "clp", "faremerking", "miljøgift"
-    ],
-    "bygg": [
-        "byggevare", "ce-merking", "dokumentasjon", "produktpass", "tek17",
-        "energikrav", "u-verdi", "brannkrav", "sikkerhet", "kvalitet",
-        "treverk", "import", "eutr", "sporbarhet", "internkontroll",
-        "elektrisk", "installasjon", "byggeplass", "hms"
-    ],
-    "handel": [
-        "emballasje", "reklamasjon", "garanti", "forbruker", "markedsføring",
-        "miljøpåstand", "åpenhet", "leverandørkjede", "menneskerettigheter",
-        "aktsomhet", "rapportering", "csrd", "esg", "compliance",
-        "bærekraftsrapport", "verdikjede"
-    ]
-}
-
-ALLE_KEYWORDS = list(set(KEYWORDS["miljø"] + KEYWORDS["bygg"] + KEYWORDS["handel"]))
-
-CONFIG = {
-    "cache_file": "lovradar_cache.json",
-    "change_threshold_percent": 0.3,
-    "request_timeout": 30,
-    "retry_attempts": 3,
-    "retry_delay": 2,
-    "rate_limit_delay": 0.5,
-    "max_rss_entries": 15,
-    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger("LovRadar")
-
-# Norske måneder for deadline-parsing
-NORWEGIAN_MONTHS = {
-    "januar": 1, "februar": 2, "mars": 3, "april": 4, "mai": 5, "juni": 6,
-    "juli": 7, "august": 8, "september": 9, "oktober": 10, "november": 11, "desember": 12
-}
-
-
-# --- HJELPEFUNKSJONER ---
-
-def normaliser_tekst(tekst: str) -> str:
-    if not tekst:
-        return ""
-    tekst = re.sub(r'\d{1,2}\.\d{1,2}\.\d{2,4}', '', tekst)
-    tekst = re.sub(r'\d{4}-\d{2}-\d{2}', '', tekst)
-    tekst = re.sub(r'[Vv]ersjon\s*\d+(\.\d+)*', '', tekst)
-    tekst = re.sub(r'Sist\s+endret.*?(?=\s{2}|\n|$)', '', tekst, flags=re.IGNORECASE)
-    tekst = re.sub(r'\s+', ' ', tekst)
-    tekst = re.sub(r'[§\-–—•·]', ' ', tekst)
-    return tekst.strip().lower()
-
-
-def ekstraher_lovtekst(html: str) -> str:
-    if not html:
-        return ""
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header", "aside",
-                     "button", "form", "input", "select", "meta", "link",
-                     "noscript", "iframe"]):
-        tag.decompose()
-    for selector in [".breadcrumb", ".navigation", ".sidebar", ".footer",
-                     ".header", ".menu", ".pagination", ".share", ".print"]:
-        for elem in soup.select(selector):
-            elem.decompose()
-    content = (soup.find("div", class_="LovdataParagraf") or
-               soup.find("div", class_="LovdataLov") or
-               soup.find("div", class_="dokumentBeholder") or
-               soup.find("div", id="LovdataDokument") or
-               soup.find("article") or
-               soup.find("main") or
-               soup.find("div", {"role": "main"}) or
-               soup.find("div", class_="content") or
-               soup.body)
-    if not content:
-        return ""
-    tekst = content.get_text(separator=" ")
-    return normaliser_tekst(tekst)
-
-
-def beregn_endring(gammel: str, ny: str) -> tuple:
-    if not gammel or not ny:
-        return 0.0, []
-    gammel_norm = normaliser_tekst(gammel)
-    ny_norm = normaliser_tekst(ny)
-    matcher = difflib.SequenceMatcher(None, gammel_norm, ny_norm)
-    likhet = matcher.ratio()
-    endring_prosent = round((1 - likhet) * 100, 2)
-    endringer = []
-    if endring_prosent > 0:
-        differ = difflib.unified_diff(
-            gammel_norm.split('. '),
-            ny_norm.split('. '),
-            lineterm=''
-        )
-        for line in differ:
-            if line.startswith('+') and not line.startswith('+++'):
-                endring = line[1:].strip()
-                if len(endring) > 20:
-                    endringer.append("Nytt: " + endring[:200] + "...")
-            elif line.startswith('-') and not line.startswith('---'):
-                endring = line[1:].strip()
-                if len(endring) > 20:
-                    endringer.append("Fjernet: " + endring[:200] + "...")
-    return endring_prosent, endringer[:5]
-
-
-def parse_norsk_dato(text: str) -> Optional[date]:
-    """Parser norske datoformater."""
-    if not text:
-        return None
-
-    text_lower = text.lower()
-
-    # dd.mm.yyyy
-    m1 = re.search(r'\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b', text_lower)
-    if m1:
-        try:
-            d, m, y = map(int, m1.groups())
-            return date(y, m, d)
-        except ValueError:
-            pass
-
-    # d. måned yyyy
-    m2 = re.search(r'\b(\d{1,2})\.\s*([a-zæøå]+)\s+(\d{4})\b', text_lower)
-    if m2:
-        try:
-            d = int(m2.group(1))
-            month_word = m2.group(2)
-            y = int(m2.group(3))
-            month_num = NORWEGIAN_MONTHS.get(month_word)
-            if month_num:
-                return date(y, month_num, d)
-        except ValueError:
-            pass
-
-    return None
-
-
-def ekstraher_deadline(text: str) -> Optional[str]:
-    """Finn frister/deadlines i tekst."""
-    if not text:
-        return None
-
-    patterns = [
-        r'(høringsfrist|frist)\s*[:\-]?\s*\d{1,2}\.\d{1,2}\.\d{4}',
-        r'(trer i kraft|ikrafttredelse)\s*[:\-]?\s*\d{1,2}\.\d{1,2}\.\d{4}',
-        r'(høringsfrist|frist)\s*[:\-]?\s*\d{1,2}\.\s*[a-zæøå]+\s+\d{4}',
-        r'innen\s+\d{1,2}\.\s*[a-zæøå]+\s+\d{4}',
-    ]
-
-    for pattern in patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            return m.group(0)
-
-    return None
-
-
-def format_prioritet(prioritet: int) -> str:
-    """Formater prioritet som emoji."""
-    return {
-        1: "🔴 Kritisk",
-        2: "🟠 Viktig",
-        3: "🟢 Info"
-    }.get(prioritet, "🟢 Info")
-
-
-def foreslå_handling(funn: Funn) -> str:
-    """Foreslå konkret handling basert på type funn."""
-    if funn.deadline:
-        return "Sett ansvarlig + intern frist denne uken."
-
-    kat = funn.kategori.lower()
-
-    if kat == "miljø":
-        if any(k in str(funn.keywords).lower() for k in ["kjemikalier", "reach", "svhc"]):
-            return "Start leverandørsjekk og dokumentasjonskrav."
-        return "Vurder påvirkning på produkter og dokumentasjon."
-
-    if kat == "bygg":
-        return "Informer innkjøp/kategori om regelverksendring."
-
-    if kat == "handel":
-        if any(k in str(funn.keywords).lower() for k in ["markedsføring", "grønnvasking"]):
-            return "Gjennomgå markedsføringspåstander/claims."
-        if any(k in str(funn.keywords).lower() for k in ["åpenhet", "leverandørkjede"]):
-            return "Start due diligence på kritiske leverandører."
-        return "Vurder påvirkning på salgs- og returprosesser."
-
-    return "Følg opp i compliance-møte."
-
-
-@dataclass
-class Funn:
-    type: str
-    kilde: str
-    kategori: str
-    tittel: str
-    url: str
-    beskrivelse: str = ""
-    endring_prosent: float = 0.0
-    endringer: list = field(default_factory=list)
-    keywords: list = field(default_factory=list)
-    prioritet: int = 3  # 1=Kritisk, 2=Viktig, 3=Info
-    deadline: str = ""
-
-    def __post_init__(self):
-        """Beregn prioritet basert på keywords og endringsprosent."""
-        if self.type == "lov" and self.endring_prosent >= 5.0:
-            self.prioritet = 1
-        elif self.type == "lov" and self.endring_prosent >= 2.0:
-            self.prioritet = 2
-        elif self.type == "rss":
-            # Høy prioritet hvis kritiske nøkkelord
-            kritiske = {"frist", "høringsfrist", "ikrafttredelse", "pålegg", "krav"}
-            if any(k in str(self.keywords).lower() for k in kritiske):
-                self.prioritet = 2
-            # Sjekk om det er en deadline
-            if self.deadline:
-                self.prioritet = min(self.prioritet, 2)
-
-
-# --- HOVEDMOTOR ---
-
-class LovRadar:
-    def __init__(self):
-        self.cache = self._last_cache()
-        self.funn = []
-        self.feil = []
-
-    def _last_cache(self) -> dict:
-        if os.path.exists(CONFIG["cache_file"]):
-            try:
-                with open(CONFIG["cache_file"], 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.warning(f"Kunne ikke laste cache: {e}")
-        return {"lover": {}, "siste_kjoring": None}
-
-    def _lagre_cache(self):
-        self.cache["siste_kjoring"] = datetime.now().isoformat()
-        try:
-            with open(CONFIG["cache_file"], 'w', encoding='utf-8') as f:
-                json.dump(self.cache, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"Kunne ikke lagre cache: {e}")
-
-    async def _fetch_med_retry(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
-        for attempt in range(CONFIG["retry_attempts"]):
-            try:
-                async with session.get(url, timeout=CONFIG["request_timeout"]) as response:
-                    if response.status == 200:
-                        return await response.text()
-                    elif response.status == 429:
-                        await asyncio.sleep(CONFIG["retry_delay"] * (attempt + 1))
-                    else:
-                        logger.warning(f"HTTP {response.status} for {url}")
-                        return None
-            except asyncio.TimeoutError:
-                logger.warning(f"Timeout for {url} (forsøk {attempt + 1})")
-            except Exception as e:
-                logger.error(f"Feil ved {url}: {e}")
-            if attempt < CONFIG["retry_attempts"] - 1:
-                await asyncio.sleep(CONFIG["retry_delay"])
-        return None
-
-    async def _skann_lover(self, session: aiohttp.ClientSession):
-        logger.info(f"Skanner {len(ALLE_LOVER)} lovkilder...")
-        if "lover" not in self.cache:
-            self.cache["lover"] = {}
-        for lov in ALLE_LOVER:
-            await asyncio.sleep(CONFIG["rate_limit_delay"])
-            html = await self._fetch_med_retry(session, lov.url)
-            if not html:
-                self.feil.append(f"Kunne ikke hente: {lov.navn}")
-                continue
-            tekst = ekstraher_lovtekst(html)
-            if not tekst:
-                continue
-            ny_hash = hashlib.sha256(tekst.encode()).hexdigest()
-            if lov.navn in self.cache["lover"]:
-                gammel = self.cache["lover"][lov.navn]
-                if ny_hash != gammel.get("hash"):
-                    endring_prosent, endringer = beregn_endring(
-                        gammel.get("tekst", ""),
-                        tekst
-                    )
-                    if endring_prosent >= CONFIG["change_threshold_percent"]:
-                        self.funn.append(Funn(
-                            type="lov",
-                            kilde=lov.navn,
-                            kategori=lov.kategori,
-                            tittel=lov.navn + " - " + lov.beskrivelse,
-                            url=lov.url,
-                            beskrivelse=lov.beskrivelse,
-                            endring_prosent=endring_prosent,
-                            endringer=endringer
-                        ))
-                        logger.info(f"Endring detektert: {lov.navn} ({endring_prosent}%)")
-            else:
-                logger.info(f"Ny baseline for: {lov.navn}")
-            self.cache["lover"][lov.navn] = {
-                "hash": ny_hash,
-                "tekst": tekst[:10000],
-                "sist_sjekket": datetime.now().isoformat(),
-                "kategori": lov.kategori
-            }
-
-    async def _skann_rss(self, session: aiohttp.ClientSession):
-        logger.info(f"Skanner {len(RSS_KILDER)} RSS-kilder...")
-        for rss in RSS_KILDER:
-            await asyncio.sleep(CONFIG["rate_limit_delay"])
-            html = await self._fetch_med_retry(session, rss.url)
-            if not html:
-                continue
-            try:
-                feed = feedparser.parse(html)
-                for entry in feed.entries[:CONFIG["max_rss_entries"]]:
-                    tittel = getattr(entry, 'title', '')
-                    sammendrag = getattr(entry, 'summary', '')
-                    link = getattr(entry, 'link', '')
-                    tekst = (tittel + " " + sammendrag).lower()
-                    matchende_keywords = [kw for kw in ALLE_KEYWORDS if kw in tekst]
-                    if matchende_keywords:
-                        eksisterende_urls = [f.url for f in self.funn if f.type == "rss"]
-                        if link not in eksisterende_urls:
-                            deadline = ekstraher_deadline(tekst)
-                            self.funn.append(Funn(
-                                type="rss",
-                                kilde=rss.navn,
-                                kategori=rss.kategori,
-                                tittel=tittel,
-                                url=link,
-                                keywords=matchende_keywords[:5],
-                                deadline=deadline or ""
-                            ))
-            except Exception as e:
-                logger.error(f"Feil ved parsing av {rss.navn}: {e}")
-
-    async def kjor_skanning(self) -> dict:
-        logger.info("=" * 60)
-        logger.info("LovRadar v14.0 - Starter strategisk skanning")
-        logger.info("=" * 60)
-        headers = {"User-Agent": CONFIG["user_agent"]}
-        connector = aiohttp.TCPConnector(limit=5)
-        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-            await self._skann_lover(session)
-            await self._skann_rss(session)
-        self._lagre_cache()
-
-        lovendringer = [asdict(f) for f in self.funn if f.type == "lov"]
-        nyheter = [asdict(f) for f in self.funn if f.type == "rss"]
-
-        rapport = {
-            "tidspunkt": datetime.now().isoformat(),
-            "lovendringer": lovendringer,
-            "nyheter": nyheter,
-            "feil": self.feil,
-            "statistikk": {
-                "lover_sjekket": len(ALLE_LOVER),
-                "rss_sjekket": len(RSS_KILDER),
-                "lovendringer_funnet": len(lovendringer),
-                "nyheter_funnet": len(nyheter)
-            }
-        }
-        logger.info("-" * 60)
-        logger.info(f"Skanning fullført: {len(lovendringer)} lovendringer, {len(nyheter)} relevante nyheter")
-        return rapport
-
-
-# --- RAPPORTER ---
-
-def generer_markdown_rapport(rapport: dict) -> str:
-    """Generer Markdown-rapport for enkel deling."""
-    now = datetime.now()
-    uke = now.isocalendar().week
-
-    lovendringer = rapport["lovendringer"]
-    nyheter = rapport["nyheter"]
-    stats = rapport["statistikk"]
-
-    # Sorter etter prioritet
-    alle_funn = []
-    for lov in lovendringer:
-        alle_funn.append(lov)
-    for nyhet in nyheter:
-        alle_funn.append(nyhet)
-
-    kritisk = [f for f in alle_funn if f.get("prioritet") == 1]
-    viktig = [f for f in alle_funn if f.get("prioritet") == 2]
-    info = [f for f in alle_funn if f.get("prioritet") == 3]
-
-    # Statistikk
-    kilder = Counter(f.get("kilde", "Ukjent") for f in alle_funn)
-    kategorier = Counter(f.get("kategori", "Ukjent") for f in alle_funn)
-
-    # Frister
-    frister = []
-    for f in alle_funn:
-        if f.get("deadline"):
-            dato = parse_norsk_dato(f["deadline"])
-            frister.append((dato, f))
-    frister.sort(key=lambda x: (x[0] is None, x[0] or date.max))
-
-    lines = []
-    lines.append(f"# LovRadar v14.1 - Ukesrapport")
-    lines.append(f"**Uke {uke}, {now.year}** | Generert: {now.strftime('%Y-%m-%d %H:%M')}")
-    lines.append("")
-    lines.append("## Ledersammendrag")
-    lines.append(f"- **Nye nyheter:** {stats['nyheter_funnet']}")
-    lines.append(f"- **Lovendringer:** {stats['lovendringer_funnet']}")
-    lines.append(f"- **Prioritering:** 🔴 {len(kritisk)} | 🟠 {len(viktig)} | 🟢 {len(info)}")
-    lines.append("")
-
-    # Topp handlinger
-    lines.append("## Anbefalte handlinger (topp 5)")
-    topp_funn = sorted(alle_funn, key=lambda x: (x.get("prioritet", 9), -x.get("endring_prosent", 0)))[:5]
-    if topp_funn:
-        for idx, f in enumerate(topp_funn, 1):
-            pri = format_prioritet(f.get("prioritet", 3))
-            # Lager Funn objekt midlertidig for å få handling
-            temp_funn = Funn(
-                type=f["type"],
-                kilde=f["kilde"],
-                kategori=f["kategori"],
-                tittel=f["tittel"],
-                url=f["url"],
-                keywords=f.get("keywords", []),
-                deadline=f.get("deadline", ""),
-                prioritet=f.get("prioritet", 3)
-            )
-            handling = foreslå_handling(temp_funn)
-            lines.append(f"{idx}. **{f['tittel'][:90]}**")
-            lines.append(f"   - {pri} | Kilde: {f['kilde']}")
-            lines.append(f"   - Handling: {handling}")
-            lines.append(f"   - [Åpne kilde]({f['url']})")
-            lines.append("")
-    else:
-        lines.append("- Ingen nye signaler denne uken.")
-    lines.append("")
-
-    # Frister
-    if frister:
-        lines.append("## Frister og tidshorisont")
-        lines.append("| Dato | Tittel | Prioritet |")
-        lines.append("|------|--------|-----------|")
-        for dato, f in frister[:10]:
-            dato_txt = dato.isoformat() if dato else f.get("deadline", "Ukjent")
-            pri = format_prioritet(f.get("prioritet", 3))
-            lines.append(f"| {dato_txt} | {f['tittel'][:60]} | {pri} |")
-        lines.append("")
-
-    # Lovendringer
-    if lovendringer:
-        lines.append("## Lovendringer")
-        lines.append("| Lov/forskrift | Endring | Vurdering |")
-        lines.append("|---------------|---------|-----------|")
-        for lov in sorted(lovendringer, key=lambda x: -x.get("endring_prosent", 0)):
-            navn = lov["kilde"]
-            pst = lov.get("endring_prosent", 0)
-            sev = "Høy" if pst >= 5 else "Moderat" if pst >= 2 else "Lav"
-            lines.append(f"| [{navn}]({lov['url']}) | {pst:.1f}% | {sev} |")
-        lines.append("")
-
-    # Kildefordeling
-    if kilder:
-        lines.append("## Kildefordeling")
-        for kilde, antall in kilder.most_common(10):
-            lines.append(f"- **{kilde}**: {antall} funn")
-        lines.append("")
-
-    # Detaljliste
-    lines.append("## Detaljliste")
-    for seksjon, items in [("🔴 Kritisk", kritisk), ("🟠 Viktig", viktig), ("🟢 Info", info)]:
-        if items:
-            lines.append(f"### {seksjon}")
-            for f in items[:15]:
-                kws = ", ".join(f.get("keywords", [])[:5])
-                dl = f" | Frist: {f.get('deadline')}" if f.get("deadline") else ""
-                lines.append(f"- **{f['tittel']}**")
-                lines.append(f"  - Kilde: {f['kilde']}{dl}")
-                lines.append(f"  - Nøkkelord: {kws}")
-                lines.append(f"  - [Les mer]({f['url']})")
-                lines.append("")
-
-    lines.append("---")
-    lines.append("*LovRadar v14.1 | Proof of Concept*")
-
-    return "\n".join(lines)
-
-
-def generer_html_rapport(rapport: dict) -> str:
-    dato = datetime.now().strftime('%d.%m.%Y')
-
-    lov_miljo = [f for f in rapport["lovendringer"] if f["kategori"] == "miljø"]
-    lov_bygg = [f for f in rapport["lovendringer"] if f["kategori"] == "bygg"]
-    lov_handel = [f for f in rapport["lovendringer"] if f["kategori"] == "handel"]
-
-    nyheter_miljo = [f for f in rapport["nyheter"] if f["kategori"] == "miljø"]
-    nyheter_bygg = [f for f in rapport["nyheter"] if f["kategori"] == "bygg"]
-    nyheter_handel = [f for f in rapport["nyheter"] if f["kategori"] == "handel"]
-    nyheter_alle = [f for f in rapport["nyheter"] if f["kategori"] == "alle"]
-
-    def render_lovendring(f):
-        endringer_html = ""
-        if f.get("endringer"):
-            endringer_html = "<ul style='margin: 5px 0; padding-left: 20px; font-size: 12px; color: #666;'>"
-            for e in f["endringer"][:3]:
-                endringer_html += "<li>" + e + "</li>"
-            endringer_html += "</ul>"
-        return (
-            "<div style='background: #fff3cd; padding: 10px; margin: 10px 0; "
-            "border-left: 4px solid #ffc107; border-radius: 4px;'>"
-            "<b>" + f['kilde'] + "</b> "
-            "<span style='color: #dc3545;'>(" + str(f['endring_prosent']) + "% endring)</span><br>"
-            "<span style='color: #666; font-size: 12px;'>" + f.get('beskrivelse', '') + "</span>"
-            + endringer_html +
-            "<a href='" + f['url'] + "' style='color: #007bff;'>Se kilde</a>"
-            "</div>"
-        )
-
-    def render_nyhet(f):
-        keywords = ", ".join(f.get("keywords", [])[:3])
-        return (
-            "<div style='padding: 8px 0; border-bottom: 1px solid #eee;'>"
-            "<b>" + f['tittel'] + "</b><br>"
-            "<span style='color: #666; font-size: 12px;'>"
-            + f['kilde'] + " | Stikkord: " + keywords + "</span><br>"
-            "<a href='" + f['url'] + "' style='color: #007bff; font-size: 12px;'>Les mer</a>"
-            "</div>"
-        )
-
-    def render_seksjon(tittel, emoji, lovendringer, nyheter, farge):
-        if not lovendringer and not nyheter:
-            return ""
-        innhold = ""
-        if lovendringer:
-            innhold += "<h4 style='margin: 10px 0 5px 0;'>Lovendringer:</h4>"
-            for f in lovendringer:
-                innhold += render_lovendring(f)
-        if nyheter:
-            innhold += "<h4 style='margin: 15px 0 5px 0;'>Relevante nyheter:</h4>"
-            for f in nyheter:
-                innhold += render_nyhet(f)
-        return (
-            "<div style='margin: 20px 0; padding: 15px; background: #f8f9fa; "
-            "border-radius: 8px; border-left: 5px solid " + farge + ";'>"
-            "<h3 style='margin: 0 0 10px 0; color: " + farge + ";'>"
-            + emoji + " " + tittel + "</h3>" + innhold + "</div>"
-        )
-
-    seksjoner = ""
-    seksjoner += render_seksjon("Miljo, Kjemikalier og Baerekraft", "[MILJO]", lov_miljo, nyheter_miljo, "#28a745")
-    seksjoner += render_seksjon("Bygg og Produktkrav", "[BYGG]", lov_bygg, nyheter_bygg, "#17a2b8")
-    seksjoner += render_seksjon("Handel og Forbruker", "[HANDEL]", lov_handel, nyheter_handel, "#6f42c1")
-    if nyheter_alle:
-        seksjoner += render_seksjon("Generelt (Stortinget)", "[GENERELT]", [], nyheter_alle, "#6c757d")
-
-    if not seksjoner:
-        seksjoner = (
-            "<div style='padding: 20px; text-align: center; color: #666;'>"
-            "<p>Ingen vesentlige endringer eller relevante nyheter denne perioden.</p>"
-            "</div>"
-        )
-
-    feil_html = ""
-    if rapport.get("feil"):
-        feil_items = "".join(["<li>" + f + "</li>" for f in rapport["feil"][:5]])
-        feil_html = (
-            "<div style='margin: 20px 0; padding: 10px; background: #f8d7da; border-radius: 4px;'>"
-            "<b>Tekniske merknader:</b><ul style='margin: 5px 0;'>" + feil_items + "</ul></div>"
-        )
-
-    stats = rapport['statistikk']
-
-    html = """<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>LovRadar Rapport</title></head>
-<body style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background: #f5f5f5;">
-<div style="background: linear-gradient(135deg, #1a5f7a 0%, #2d8e9f 100%); color: white; padding: 25px; border-radius: 12px; margin-bottom: 20px;">
-<h1 style="margin: 0; font-size: 24px;">LovRadar v14.0</h1>
-<p style="margin: 5px 0 0 0; opacity: 0.9;">Baerekraft og Handel - Byggevarebransjen</p>
-<p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.8;">Strategisk rapport: """ + dato + """</p>
-</div>
-<div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-around; text-align: center;">
-<div><div style="font-size: 28px; font-weight: bold; color: #dc3545;">""" + str(stats['lovendringer_funnet']) + """</div><div style="font-size: 12px; color: #666;">Lovendringer</div></div>
-<div><div style="font-size: 28px; font-weight: bold; color: #17a2b8;">""" + str(stats['nyheter_funnet']) + """</div><div style="font-size: 12px; color: #666;">Relevante nyheter</div></div>
-<div><div style="font-size: 28px; font-weight: bold; color: #28a745;">""" + str(stats['lover_sjekket']) + """</div><div style="font-size: 12px; color: #666;">Kilder overvaket</div></div>
-</div>
-<div style="background: white; padding: 20px; border-radius: 8px;">""" + seksjoner + """</div>
-""" + feil_html + """
-<div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
-<p>LovRadar v14.0 | Proof of Concept | Pilotfase</p>
-<p>Basert pa offentlige rettskilder under NLOD 2.0</p>
-</div>
-</body>
-</html>"""
-
-    return html
-
-
-def send_epost_rapport(rapport: dict, markdown: str = ""):
-    bruker = os.environ.get("EMAIL_USER", "").strip()
-    passord = os.environ.get("EMAIL_PASS", "").strip()
-    mottaker = os.environ.get("EMAIL_RECIPIENT", "").strip() or bruker
-
-    if not all([bruker, passord, mottaker]):
-        logger.warning("E-postkonfigurasjon mangler. Hopper over sending.")
-        return False
-
-    if not rapport["lovendringer"] and not rapport["nyheter"]:
-        logger.info("Ingen funn a rapportere. Hopper over e-post.")
-        return False
-
-    msg = MIMEMultipart("alternative")
-    dato = datetime.now().strftime('%d.%m.%Y')
-    uke = datetime.now().isocalendar().week
-    n_lov = rapport['statistikk']['lovendringer_funnet']
-    n_nyheter = rapport['statistikk']['nyheter_funnet']
-
-    # Prioritetstelling
-    alle_funn = rapport["lovendringer"] + rapport["nyheter"]
-    kritisk = len([f for f in alle_funn if f.get("prioritet") == 1])
-    viktig = len([f for f in alle_funn if f.get("prioritet") == 2])
-
-    emne = f"LovRadar uke {uke}: "
-    if kritisk > 0:
-        emne += f"🔴 {kritisk} kritisk, "
-    if viktig > 0:
-        emne += f"🟠 {viktig} viktig, "
-    emne += f"{n_lov} lovendring(er), {n_nyheter} nyhet(er)"
-
-    msg["Subject"] = emne
-    msg["From"] = bruker
-    msg["To"] = mottaker
-
-    # Legg til Markdown som preformatert tekst (lettere å lese i e-postklient)
-    if markdown:
-        tekst_versjon = markdown.replace("**", "").replace("##", "").replace("#", "")
-        msg.attach(MIMEText(tekst_versjon, "plain", "utf-8"))
-
-    # HTML-rapport
-    html = generer_html_rapport(rapport)
-    msg.attach(MIMEText(html, "html", "utf-8"))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(bruker, passord)
-            server.sendmail(bruker, [mottaker], msg.as_string())
-        logger.info("Rapport sendt til " + mottaker)
-        return True
-    except Exception as e:
-        logger.error("E-postfeil: " + str(e))
-        return False
-
-
-# --- HOVEDPROGRAM ---
-
-async def main():
-    radar = LovRadar()
-    rapport = await radar.kjor_skanning()
-
-    # Lagre JSON-rapport
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    rapport_fil_json = f"lovradar_rapport_{timestamp}.json"
-    with open(rapport_fil_json, 'w', encoding='utf-8') as f:
-        json.dump(rapport, f, indent=2, ensure_ascii=False)
-    logger.info(f"JSON rapport lagret: {rapport_fil_json}")
-
-    # Generer og lagre Markdown-rapport
-    markdown = generer_markdown_rapport(rapport)
-    rapport_fil_md = f"lovradar_rapport_{timestamp}.md"
-    with open(rapport_fil_md, 'w', encoding='utf-8') as f:
-        f.write(markdown)
-    logger.info(f"Markdown rapport lagret: {rapport_fil_md}")
-
-    # Send e-post med begge format
-    send_epost_rapport(rapport, markdown)
-    return rapport
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
++   1 #!/usr/bin/env python3
++   2 """
++   3 LovSonar v1.0 - Strategisk Fremtidsovervåkning
++   4 Byggevarebransjen
++   5 
++   6 Fokus: Overvåker FREMTIDIGE reguleringer (ikke gjeldende lover)
++   7 - Norske forslag: NOU-er, Stortingsforslag, høringer
++   8 - EU-direktiver: Green Deal, ESPR, PPWR, DPP
++   9 - Regulatoriske trender i bærekraft
++  10 """
++  11 
++  12 import os
++  13 import json
++  14 import hashlib
++  15 import smtplib
++  16 import re
++  17 import asyncio
++  18 import aiohttp
++  19 import logging
++  20 from datetime import datetime, date
++  21 from email.mime.text import MIMEText
++  22 from email.mime.multipart import MIMEMultipart
++  23 from dataclasses import dataclass, field, asdict
++  24 from typing import Optional
++  25 from collections import Counter
++  26 from bs4 import BeautifulSoup
++  27 import feedparser
++  28 
++  29 # --- KONFIGURASJON ---
++  30 
++  31 @dataclass
++  32 class Signal:
++  33     """Et fremtidssignal (NOU, forslag, høring, EU-direktiv)."""
++  34     type: str  # "nou", "stortingsforslag", "horing", "eu_direktiv", "nyhet"
++  35     kilde: str
++  36     kategori: str
++  37     tittel: str
++  38     url: str
++  39     sammendrag: str = ""
++  40     keywords: list = field(default_factory=list)
++  41     prioritet: int = 3  # 1=Kritisk, 2=Viktig, 3=Info
++  42     sannsynlighet: str = "Ukjent"  # Høy/Medium/Lav
++  43     konsekvens: str = "Ukjent"  # Høy/Medium/Lav
++  44     tidshorisont: str = "Ukjent"  # <1år, 1-3år, >3år
++  45     deadline: str = ""
++  46     publisert: Optional[date] = None
++  47 
++  48     def __post_init__(self):
++  49         """Beregn prioritet."""
++  50         # Høy prioritet hvis høring med frist
++  51         if self.type == "horing" and self.deadline:
++  52             self.prioritet = 1
++  53         # Høy prioritet hvis kritiske nøkkelord
++  54         kritiske = {"frist", "høringsfrist", "ikrafttredelse", "krav", "forbud", "pålegg"}
++  55         if any(k in str(self.keywords).lower() for k in kritiske):
++  56             self.prioritet = min(self.prioritet, 2)
++  57         # EU-direktiver er ofte viktige
++  58         if self.type == "eu_direktiv":
++  59             self.prioritet = 2
++  60 
++  61 
++  62 # Strategiske kilder - FREMTIDSRETTEDE
++  63 SONAR_KILDER = {
++  64     "stortinget_saker": {
++  65         "url": "https://data.stortinget.no/eksport/saker?format=json&sesjonid=2023-2024",
++  66         "type": "api",
++  67         "kategori": "norsk_politikk"
++  68     },
++  69     "regjeringen_horinger": {
++  70         "url": "https://www.regjeringen.no/no/dokument/horinger/id438325/?type=rss",
++  71         "type": "rss",
++  72         "kategori": "horinger"
++  73     },
++  74     "regjeringen_nou": {
++  75         "url": "https://www.regjeringen.no/no/dokumenter/nou-er/id438249/?type=rss",
++  76         "type": "rss",
++  77         "kategori": "nou"
++  78     },
++  79     "regjeringen_proposisjoner": {
++  80         "url": "https://www.regjeringen.no/no/dokumenter/proposisjoner/id438246/?type=rss",
++  81         "type": "rss",
++  82         "kategori": "proposisjon"
++  83     },
++  84     "eur_lex_miljopakken": {
++  85         "url": "https://eur-lex.europa.eu/search.html?qid=1234567890&DTS_DOM=EU_LAW&type=advanced&lang=en&SUBDOM_INIT=ALL_ALL&DTS_SUBDOM=ALL_ALL",
++  86         "type": "web",  # Må scrapes
++  87         "kategori": "eu"
++  88     }
++  89 }
++  90 
++  91 # Nøkkelord tilpasset FREMTIDIGE reguleringer
++  92 FREMTID_KEYWORDS = {
++  93     "sirkulær_økonomi": [
++  94         "sirkulær", "produktpass", "dpp", "digital produktpass", "reparerbarhet",
++  95         "levetid", "modularitet", "resirkulering", "gjenvinning", "gjenbruk",
++  96         "ecodesign", "espr", "økodesign"
++  97     ],
++  98     "emballasje": [
++  99         "emballasje", "ppwr", "packaging", "plastemballasje", "gjenbruksemballasje",
++ 100         "emballasjeforordningen", "produsentansvar", "pant"
++ 101     ],
++ 102     "klima_energi": [
++ 103         "klimagass", "co2", "karbonavtrykk", "klimanøytral", "nullutslipp",
++ 104         "grønn", "fornybar", "energimerking", "energikrav"
++ 105     ],
++ 106     "kjemikalier": [
++ 107         "reach", "svhc", "farlige stoffer", "kjemikalier", "biocid", "clp",
++ 108         "mikroplast", "pfas", "evige kjemikalier"
++ 109     ],
++ 110     "sporbarhet": [
++ 111         "sporbarhet", "dokumentasjon", "leverandørkjede", "due diligence",
++ 112         "åpenhet", "menneskerettigheter", "tømmer", "eutr", "konfliktmineraler"
++ 113     ],
++ 114     "grønnvasking": [
++ 115         "grønnvasking", "greenwashing", "miljøpåstand", "bærekraftspåstand",
++ 116         "markedsføring", "villedende", "dokumenterbar"
++ 117     ],
++ 118     "bygg_produkter": [
++ 119         "byggevare", "byggprodukt", "ce-merking", "dok", "produktdokumentasjon",
++ 120         "tek", "byggteknisk", "energieffektiv"
++ 121     ]
++ 122 }
++ 123 
++ 124 ALLE_FREMTID_KEYWORDS = []
++ 125 for kategori_keywords in FREMTID_KEYWORDS.values():
++ 126     ALLE_FREMTID_KEYWORDS.extend(kategori_keywords)
++ 127 
++ 128 CONFIG = {
++ 129     "cache_file": "lovsonar_cache.json",
++ 130     "request_timeout": 30,
++ 131     "retry_attempts": 3,
++ 132     "retry_delay": 2,
++ 133     "rate_limit_delay": 0.5,
++ 134     "max_entries": 20,
++ 135     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
++ 136 }
++ 137 
++ 138 logging.basicConfig(
++ 139     level=logging.INFO,
++ 140     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
++ 141     datefmt="%Y-%m-%d %H:%M:%S"
++ 142 )
++ 143 logger = logging.getLogger("LovSonar")
++ 144 
++ 145 # Norske måneder
++ 146 NORWEGIAN_MONTHS = {
++ 147     "januar": 1, "februar": 2, "mars": 3, "april": 4, "mai": 5, "juni": 6,
++ 148     "juli": 7, "august": 8, "september": 9, "oktober": 10, "november": 11, "desember": 12
++ 149 }
++ 150 
++ 151 
++ 152 # --- HJELPEFUNKSJONER ---
++ 153 
++ 154 def parse_norsk_dato(text: str) -> Optional[date]:
++ 155     """Parser norske datoformater."""
++ 156     if not text:
++ 157         return None
++ 158     text_lower = text.lower()
++ 159     
++ 160     # dd.mm.yyyy
++ 161     m1 = re.search(r'\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b', text_lower)
++ 162     if m1:
++ 163         try:
++ 164             d, m, y = map(int, m1.groups())
++ 165             return date(y, m, d)
++ 166         except ValueError:
++ 167             pass
++ 168     
++ 169     # d. måned yyyy
++ 170     m2 = re.search(r'\b(\d{1,2})\.\s*([a-zæøå]+)\s+(\d{4})\b', text_lower)
++ 171     if m2:
++ 172         try:
++ 173             d = int(m2.group(1))
++ 174             month_word = m2.group(2)
++ 175             y = int(m2.group(3))
++ 176             month_num = NORWEGIAN_MONTHS.get(month_word)
++ 177             if month_num:
++ 178                 return date(y, month_num, d)
++ 179         except ValueError:
++ 180             pass
++ 181     
++ 182     return None
++ 183 
++ 184 
++ 185 def ekstraher_deadline(text: str) -> Optional[str]:
++ 186     """Finn frister/deadlines."""
++ 187     if not text:
++ 188         return None
++ 189     
++ 190     patterns = [
++ 191         r'(høringsfrist|frist)\s*[:\-]?\s*\d{1,2}\.\d{1,2}\.\d{4}',
++ 192         r'(trer i kraft|ikrafttredelse)\s*[:\-]?\s*\d{1,2}\.\d{1,2}\.\d{4}',
++ 193         r'(høringsfrist|frist)\s*[:\-]?\s*\d{1,2}\.\s*[a-zæøå]+\s+\d{4}',
++ 194         r'(senest|innen)\s+\d{1,2}\.\s*[a-zæøå]+\s+\d{4}',
++ 195     ]
++ 196     
++ 197     for pattern in patterns:
++ 198         m = re.search(pattern, text, re.IGNORECASE)
++ 199         if m:
++ 200             return m.group(0)
++ 201     
++ 202     return None
++ 203 
++ 204 
++ 205 def estimat_tidshorisont(text: str, publisert: Optional[date]) -> str:
++ 206     """Estimat når reguleringen kan tre i kraft."""
++ 207     if not text:
++ 208         return "Ukjent"
++ 209     
++ 210     text_lower = text.lower()
++ 211     
++ 212     # Sjekk eksplisitte tidspunkter
++ 213     if re.search(r'(2026|umiddelbar|straks|med virkning fra)', text_lower):
++ 214         return "<1 år"
++ 215     if re.search(r'(2027|2028)', text_lower):
++ 216         return "1-3 år"
++ 217     if re.search(r'(2029|2030|langsiktig)', text_lower):
++ 218         return ">3 år"
++ 219     
++ 220     # Basert på type dokument
++ 221     if "høring" in text_lower or "forslag" in text_lower:
++ 222         return "1-3 år"
++ 223     if "nou" in text_lower or "utredning" in text_lower:
++ 224         return ">3 år"
++ 225     
++ 226     return "Ukjent"
++ 227 
++ 228 
++ 229 def vurder_sannsynlighet(text: str, type: str) -> str:
++ 230     """Vurder sannsynlighet for at forslaget blir vedtatt."""
++ 231     if not text:
++ 232         return "Ukjent"
++ 233     
++ 234     text_lower = text.lower()
++ 235     
++ 236     # Høy sannsynlighet
++ 237     if type == "proposisjon" or "regjeringen foreslår" in text_lower:
++ 238         return "Høy"
++ 239     if "eu-direktiv" in text_lower or "eu-forordning" in text_lower:
++ 240         return "Høy"
++ 241     
++ 242     # Medium sannsynlighet
++ 243     if type == "horing" or "høring" in text_lower:
++ 244         return "Medium"
++ 245     
++ 246     # Lav sannsynlighet
++ 247     if type == "stortingsforslag" or "representantforslag" in text_lower:
++ 248         return "Lav"
++ 249     
++ 250     return "Ukjent"
++ 251 
++ 252 
++ 253 def vurder_konsekvens(keywords: list, kategori: str) -> str:
++ 254     """Vurder konsekvens for byggevarebransjen."""
++ 255     kw_str = " ".join(keywords).lower()
++ 256     
++ 257     # Høy konsekvens
++ 258     hoye_impact = ["forbud", "krav", "pålegg", "dokumentasjon", "produktpass", "sporbarhet"]
++ 259     if any(k in kw_str for k in hoye_impact):
++ 260         return "Høy"
++ 261     
++ 262     # Emballasje og kjemikalier er ofte høy konsekvens
++ 263     if kategori in ["emballasje", "kjemikalier", "sporbarhet"]:
++ 264         return "Høy"
++ 265     
++ 266     # Medium konsekvens
++ 267     if kategori in ["sirkulær_økonomi", "grønnvasking"]:
++ 268         return "Medium"
++ 269     
++ 270     return "Lav"
++ 271 
++ 272 
++ 273 def format_prioritet(prioritet: int) -> str:
++ 274     return {
++ 275         1: "🔴 Kritisk",
++ 276         2: "🟠 Viktig",
++ 277         3: "🟢 Info"
++ 278     }.get(prioritet, "🟢 Info")
++ 279 
++ 280 
++ 281 def foreslå_handling(signal: Signal) -> str:
++ 282     """Foreslå handling for signal."""
++ 283     if signal.deadline:
++ 284         return "Forbered høringssvar - sett ansvarlig denne uken."
++ 285     
++ 286     if signal.sannsynlighet == "Høy" and signal.konsekvens == "Høy":
++ 287         return "Kritisk - start umiddelbar scenarioanalyse og kostnadsestimering."
++ 288     
++ 289     if signal.konsekvens == "Høy":
++ 290         return "Analyser påvirkning på produktportefølje og leverandører."
++ 291     
++ 292     if signal.type == "eu_direktiv":
++ 293         return "Følg implementering i EU/EØS - typisk 1-2 års varsel."
++ 294     
++ 295     if "emballasje" in signal.kategori:
++ 296         return "Vurder emballasjedesign og produsentansvar-løsninger."
++ 297     
++ 298     if "kjemikalier" in signal.kategori:
++ 299         return "Innhent dokumentasjon fra leverandører (SDS, SVHC-lister)."
++ 300     
++ 301     return "Bevar i fremtidsoversikt - følg med på utvikling."
++ 302 
++ 303 
++ 304 # --- HOVEDMOTOR ---
++ 305 
++ 306 class LovSonar:
++ 307     def __init__(self):
++ 308         self.cache = self._last_cache()
++ 309         self.signaler = []
++ 310         self.feil = []
++ 311     
++ 312     def _last_cache(self) -> dict:
++ 313         if os.path.exists(CONFIG["cache_file"]):
++ 314             try:
++ 315                 with open(CONFIG["cache_file"], 'r', encoding='utf-8') as f:
++ 316                     return json.load(f)
++ 317             except Exception as e:
++ 318                 logger.warning(f"Kunne ikke laste cache: {e}")
++ 319         return {"sett_urls": [], "siste_kjoring": None}
++ 320     
++ 321     def _lagre_cache(self):
++ 322         self.cache["siste_kjoring"] = datetime.now().isoformat()
++ 323         try:
++ 324             with open(CONFIG["cache_file"], 'w', encoding='utf-8') as f:
++ 325                 json.dump(self.cache, f, indent=2, ensure_ascii=False)
++ 326         except Exception as e:
++ 327             logger.error(f"Kunne ikke lagre cache: {e}")
++ 328     
++ 329     async def _fetch_med_retry(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
++ 330         for attempt in range(CONFIG["retry_attempts"]):
++ 331             try:
++ 332                 async with session.get(url, timeout=CONFIG["request_timeout"]) as response:
++ 333                     if response.status == 200:
++ 334                         return await response.text()
++ 335                     elif response.status == 429:
++ 336                         await asyncio.sleep(CONFIG["retry_delay"] * (attempt + 1))
++ 337                     else:
++ 338                         logger.warning(f"HTTP {response.status} for {url}")
++ 339                         return None
++ 340             except asyncio.TimeoutError:
++ 341                 logger.warning(f"Timeout for {url} (forsøk {attempt + 1})")
++ 342             except Exception as e:
++ 343                 logger.error(f"Feil ved {url}: {e}")
++ 344             
++ 345             if attempt < CONFIG["retry_attempts"] - 1:
++ 346                 await asyncio.sleep(CONFIG["retry_delay"])
++ 347         
++ 348         return None
++ 349     
++ 350     async def _skann_rss_kilder(self, session: aiohttp.ClientSession):
++ 351         """Skann RSS-feeds fra Regjeringen."""
++ 352         logger.info("Skanner RSS-kilder (høringer, NOU-er, proposisjoner)...")
++ 353         
++ 354         rss_kilder = {k: v for k, v in SONAR_KILDER.items() if v["type"] == "rss"}
++ 355         
++ 356         for navn, config in rss_kilder.items():
++ 357             await asyncio.sleep(CONFIG["rate_limit_delay"])
++ 358             
++ 359             html = await self._fetch_med_retry(session, config["url"])
++ 360             if not html:
++ 361                 continue
++ 362             
++ 363             try:
++ 364                 feed = feedparser.parse(html)
++ 365                 
++ 366                 for entry in feed.entries[:CONFIG["max_entries"]]:
++ 367                     tittel = getattr(entry, 'title', '')
++ 368                     sammendrag = getattr(entry, 'summary', '')
++ 369                     link = getattr(entry, 'link', '')
++ 370                     
++ 371                     # Sjekk om allerede sett
++ 372                     if link in self.cache.get("sett_urls", []):
++ 373                         continue
++ 374                     
++ 375                     tekst = f"{tittel} {sammendrag}".lower()
++ 376                     
++ 377                     # Finn matchende keywords
++ 378                     matchende_keywords = [kw for kw in ALLE_FREMTID_KEYWORDS if kw in tekst]
++ 379                     
++ 380                     if matchende_keywords:
++ 381                         # Finn kategori
++ 382                         kategorier = []
++ 383                         for kat, kws in FREMTID_KEYWORDS.items():
++ 384                             if any(k in tekst for k in kws):
++ 385                                 kategorier.append(kat)
++ 386                         
++ 387                         hovedkategori = kategorier[0] if kategorier else "generelt"
++ 388                         
++ 389                         deadline = ekstraher_deadline(tekst)
++ 390                         sannsynlighet = vurder_sannsynlighet(tekst, config["kategori"])
++ 391                         konsekvens = vurder_konsekvens(matchende_keywords, hovedkategori)
++ 392                         tidshorisont = estimat_tidshorisont(tekst, None)
++ 393                         
++ 394                         self.signaler.append(Signal(
++ 395                             type=config["kategori"],
++ 396                             kilde=navn.replace("_", " ").title(),
++ 397                             kategori=hovedkategori,
++ 398                             tittel=tittel,
++ 399                             url=link,
++ 400                             sammendrag=sammendrag[:300],
++ 401                             keywords=matchende_keywords[:8],
++ 402                             deadline=deadline or "",
++ 403                             sannsynlighet=sannsynlighet,
++ 404                             konsekvens=konsekvens,
++ 405                             tidshorisont=tidshorisont
++ 406                         ))
++ 407                         
++ 408                         # Legg til i cache
++ 409                         if "sett_urls" not in self.cache:
++ 410                             self.cache["sett_urls"] = []
++ 411                         self.cache["sett_urls"].append(link)
++ 412                         
++ 413                         logger.info(f"Nytt signal: {tittel[:60]}...")
++ 414             
++ 415             except Exception as e:
++ 416                 logger.error(f"Feil ved parsing av {navn}: {e}")
++ 417     
++ 418     async def kjor_skanning(self) -> dict:
++ 419         logger.info("=" * 70)
++ 420         logger.info("LovSonar v1.0 - Starter fremtidsovervåkning")
++ 421         logger.info("=" * 70)
++ 422         
++ 423         headers = {"User-Agent": CONFIG["user_agent"]}
++ 424         connector = aiohttp.TCPConnector(limit=5)
++ 425         
++ 426         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
++ 427             await self._skann_rss_kilder(session)
++ 428         
++ 429         self._lagre_cache()
++ 430         
++ 431         rapport = {
++ 432             "tidspunkt": datetime.now().isoformat(),
++ 433             "signaler": [asdict(s) for s in self.signaler],
++ 434             "feil": self.feil,
++ 435             "statistikk": {
++ 436                 "signaler_funnet": len(self.signaler),
++ 437                 "kilder_sjekket": len([k for k, v in SONAR_KILDER.items() if v["type"] == "rss"])
++ 438             }
++ 439         }
++ 440         
++ 441         logger.info("-" * 70)
++ 442         logger.info(f"Skanning fullført: {len(self.signaler)} nye signaler")
++ 443         
++ 444         return rapport
++ 445 
++ 446 
++ 447 # --- RAPPORTER ---
++ 448 
++ 449 def generer_markdown_rapport(rapport: dict) -> str:
++ 450     """Generer fremtidsrettet Markdown-rapport."""
++ 451     now = datetime.now()
++ 452     uke = now.isocalendar().week
++ 453     
++ 454     signaler = [Signal(**s) for s in rapport["signaler"]]
++ 455     stats = rapport["statistikk"]
++ 456     
++ 457     # Sorter etter prioritet
++ 458     kritisk = [s for s in signaler if s.prioritet == 1]
++ 459     viktig = [s for s in signaler if s.prioritet == 2]
++ 460     info = [s for s in signaler if s.prioritet == 3]
++ 461     
++ 462     # Frister
++ 463     frister = []
++ 464     for s in signaler:
++ 465         if s.deadline:
++ 466             dato = parse_norsk_dato(s.deadline)
++ 467             frister.append((dato, s))
++ 468     frister.sort(key=lambda x: (x[0] is None, x[0] or date.max))
++ 469     
++ 470     # Statistikk
++ 471     per_kategori = Counter(s.kategori for s in signaler)
++ 472     per_type = Counter(s.type for s in signaler)
++ 473     per_konsekvens = Counter(s.konsekvens for s in signaler)
++ 474     
++ 475     lines = []
++ 476     lines.append(f"# 🔮 LovSonar v1.0 - Fremtidsrapport")
++ 477     lines.append(f"**Uke {uke}, {now.year}** | Generert: {now.strftime('%Y-%m-%d %H:%M')}")
++ 478     lines.append("")
++ 479     lines.append("## 📊 Strategisk Sammendrag")
++ 480     lines.append(f"- **Nye signaler:** {stats['signaler_funnet']}")
++ 481     lines.append(f"- **Prioritering:** 🔴 {len(kritisk)} | 🟠 {len(viktig)} | 🟢 {len(info)}")
++ 482     lines.append(f"- **Høringer med frist:** {len(frister)}")
++ 483     lines.append("")
++ 484     
++ 485     # Strategisk matrise
++ 486     lines.append("## 🎯 Strategisk Vurdering")
++ 487     lines.append("| Signal | Sannsynlighet | Konsekvens | Tidshorisont |")
++ 488     lines.append("|--------|---------------|-----------|--------------|")
++ 489     for s in sorted(signaler, key=lambda x: (x.prioritet, x.konsekvens))[:10]:
++ 490         lines.append(f"| {s.tittel[:40]} | {s.sannsynlighet} | {s.konsekvens} | {s.tidshorisont} |")
++ 491     lines.append("")
++ 492     
++ 493     # Topp handlinger
++ 494     lines.append("## 💡 Anbefalte Handlinger (Topp 5)")
++ 495     topp_signaler = sorted(signaler, key=lambda x: (x.prioritet, -ord(x.konsekvens[0])))[:5]
++ 496     if topp_signaler:
++ 497         for idx, s in enumerate(topp_signaler, 1):
++ 498             pri = format_prioritet(s.prioritet)
++ 499             handling = foreslå_handling(s)
++ 500             lines.append(f"{idx}. **{s.tittel[:80]}**")
++ 501             lines.append(f"   - {pri} | Konsekvens: {s.konsekvens} | Sannsynlighet: {s.sannsynlighet}")
++ 502             lines.append(f"   - Handling: {handling}")
++ 503             lines.append(f"   - [Les mer]({s.url})")
++ 504             lines.append("")
++ 505     else:
++ 506         lines.append("- Ingen nye signaler denne uken.")
++ 507     lines.append("")
++ 508     
++ 509     # Frister
++ 510     if frister:
++ 511         lines.append("## ⏰ Høringer med Frist")
++ 512         lines.append("| Frist | Tittel | Type |")
++ 513         lines.append("|-------|--------|------|")
++ 514         for dato, s in frister[:10]:
++ 515             dato_txt = dato.isoformat() if dato else s.deadline
++ 516             lines.append(f"| {dato_txt} | {s.tittel[:50]} | {s.type} |")
++ 517         lines.append("")
++ 518     
++ 519     # Tematisk fordeling
++ 520     if per_kategori:
++ 521         lines.append("## 📈 Tematisk Fordeling")
++ 522         for kat, antall in per_kategori.most_common():
++ 523             lines.append(f"- **{kat.replace('_', ' ').title()}**: {antall} signaler")
++ 524         lines.append("")
++ 525     
++ 526     # Detaljliste
++ 527     lines.append("## 📋 Detaljert Signalliste")
++ 528     for seksjon, items in [("🔴 Kritiske", kritisk), ("🟠 Viktige", viktig), ("🟢 Info", info)]:
++ 529         if items:
++ 530             lines.append(f"### {seksjon}")
++ 531             for s in items[:15]:
++ 532                 kws = ", ".join(s.keywords[:5])
++ 533                 dl = f" | Frist: {s.deadline}" if s.deadline else ""
++ 534                 lines.append(f"- **[{s.type.upper()}] {s.tittel}**")
++ 535                 lines.append(f"  - Kilde: {s.kilde}{dl}")
++ 536                 lines.append(f"  - Vurdering: {s.sannsynlighet} sannsynlighet, {s.konsekvens} konsekvens, {s.tidshorisont}")
++ 537                 lines.append(f"  - Nøkkelord: {kws}")
++ 538                 lines.append(f"  - Handling: {foreslå_handling(s)}")
++ 539                 lines.append(f"  - [Les dokumentet]({s.url})")
++ 540                 lines.append("")
++ 541     
++ 542     lines.append("---")
++ 543     lines.append("*LovSonar v1.0 | Pilot - Strategisk Fremtidsovervåkning for Byggevarebransjen*")
++ 544     
++ 545     return "\n".join(lines)
++ 546 
++ 547 
++ 548 def send_epost_rapport(rapport: dict, markdown: str):
++ 549     """Send e-post med rapport."""
++ 550     bruker = os.environ.get("EMAIL_USER", "").strip()
++ 551     passord = os.environ.get("EMAIL_PASS", "").strip()
++ 552     mottaker = os.environ.get("EMAIL_RECIPIENT", "").strip() or bruker
++ 553     
++ 554     if not all([bruker, passord, mottaker]):
++ 555         logger.warning("E-postkonfigurasjon mangler.")
++ 556         return False
++ 557     
++ 558     if not rapport["signaler"]:
++ 559         logger.info("Ingen nye signaler - hopper over e-post.")
++ 560         return False
++ 561     
++ 562     msg = MIMEMultipart("alternative")
++ 563     uke = datetime.now().isocalendar().week
++ 564     n_signaler = rapport['statistikk']['signaler_funnet']
++ 565     
++ 566     signaler_obj = [Signal(**s) for s in rapport["signaler"]]
++ 567     kritisk = len([s for s in signaler_obj if s.prioritet == 1])
++ 568     viktig = len([s for s in signaler_obj if s.prioritet == 2])
++ 569     
++ 570     emne = f"🔮 LovSonar uke {uke}: "
++ 571     if kritisk > 0:
++ 572         emne += f"🔴 {kritisk} kritisk, "
++ 573     if viktig > 0:
++ 574         emne += f"🟠 {viktig} viktig, "
++ 575     emne += f"{n_signaler} nye signaler"
++ 576     
++ 577     msg["Subject"] = emne
++ 578     msg["From"] = bruker
++ 579     msg["To"] = mottaker
++ 580     
++ 581     # Tekst-versjon
++ 582     tekst_versjon = markdown.replace("**", "").replace("##", "").replace("#", "")
++ 583     msg.attach(MIMEText(tekst_versjon, "plain", "utf-8"))
++ 584     
++ 585     # HTML-versjon (enkel)
++ 586     html = f"<html><body><pre style='font-family:Arial,sans-serif;white-space:pre-wrap'>{markdown}</pre></body></html>"
++ 587     msg.attach(MIMEText(html, "html", "utf-8"))
++ 588     
++ 589     try:
++ 590         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
++ 591             server.login(bruker, passord)
++ 592             server.sendmail(bruker, [mottaker], msg.as_string())
++ 593         logger.info(f"Rapport sendt til {mottaker}")
++ 594         return True
++ 595     except Exception as e:
++ 596         logger.error(f"E-postfeil: {e}")
++ 597         return False
++ 598 
++ 599 
++ 600 # --- HOVEDPROGRAM ---
++ 601 
++ 602 async def main():
++ 603     sonar = LovSonar()
++ 604     rapport = await sonar.kjor_skanning()
++ 605     
++ 606     # Lagre JSON
++ 607     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
++ 608     rapport_fil_json = f"lovsonar_rapport_{timestamp}.json"
++ 609     with open(rapport_fil_json, 'w', encoding='utf-8') as f:
++ 610         json.dump(rapport, f, indent=2, ensure_ascii=False)
++ 611     logger.info(f"JSON rapport lagret: {rapport_fil_json}")
++ 612     
++ 613     # Generer og lagre Markdown
++ 614     markdown = generer_markdown_rapport(rapport)
++ 615     rapport_fil_md = f"lovsonar_rapport_{timestamp}.md"
++ 616     with open(rapport_fil_md, 'w', encoding='utf-8') as f:
++ 617         f.write(markdown)
++ 618     logger.info(f"Markdown rapport lagret: {rapport_fil_md}")
++ 619     
++ 620     # Send e-post
++ 621     send_epost_rapport(rapport, markdown)
++ 622     
++ 623     return rapport
++ 624 
++ 625 
++ 626 if __name__ == "__main__":
++ 627     asyncio.run(main())
